@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>pptx-viewer — demo</title>
+    <style>
+      :root { color-scheme: light dark; }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        font: 14px/1.5 system-ui, sans-serif;
+        background: #1e1e2e;
+        color: #e6e6e6;
+      }
+      header {
+        padding: 16px 20px;
+        border-bottom: 1px solid #333;
+        display: flex;
+        align-items: center;
+        gap: 16px;
+      }
+      header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+      #drop {
+        margin: 20px;
+        padding: 40px;
+        border: 2px dashed #555;
+        border-radius: 10px;
+        text-align: center;
+        color: #aaa;
+        transition: border-color 0.15s, background 0.15s;
+      }
+      #drop.over { border-color: #7aa2f7; background: #2a2a40; color: #fff; }
+      #info { margin: 0 20px 20px; }
+      .meta { color: #9ece6a; margin-bottom: 12px; white-space: pre-wrap; }
+      table { border-collapse: collapse; width: 100%; font-size: 12px; }
+      th, td { text-align: left; padding: 4px 8px; border-bottom: 1px solid #2a2a3a; }
+      th { color: #7aa2f7; position: sticky; top: 0; background: #1e1e2e; }
+      td.ct { color: #888; }
+      code { color: #e0af68; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1>pptx-viewer</h1>
+      <input type="file" id="file" accept=".pptx" />
+    </header>
+    <div id="drop">Drop a <code>.pptx</code> file here, or use the picker above.</div>
+    <div id="info"></div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

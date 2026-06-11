@@ -1,0 +1,12 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@pptx-viewer/core": ["../packages/core/src/index.ts"],
+      "@pptx-viewer/react": ["../packages/react/src/index.ts"]
+    }
+  },
+  "include": ["src"]
+}
