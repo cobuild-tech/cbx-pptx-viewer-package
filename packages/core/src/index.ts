@@ -10,8 +10,9 @@
  *   // when done: viewer.destroy(); deck.dispose();
  */
 export { Deck, Deck as loadDeck } from './parse/deck.js';
-export { Viewer, createViewer, type ViewerOptions, type FitMode } from './viewer/viewer.js';
+export { Viewer, createViewer, type ViewerOptions } from './viewer/viewer.js';
 export { renderSlide, type RenderDeps } from './render/dom.js';
+export { installDeckFonts, type FontInstallation } from './render/fonts.js';
 
 import { Deck } from './parse/deck.js';
 /** Load a .pptx from raw bytes into a renderable {@link Deck}. */

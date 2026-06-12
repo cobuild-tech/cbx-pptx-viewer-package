@@ -160,6 +160,9 @@ function customGeomSvg(
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.style.position = 'absolute';
   svg.style.inset = '0';
+  // Geometry must stay within the shape box; clipping prevents an imperfect
+  // path (e.g. a spiral with an off arc) from drawing lines across the slide.
+  svg.style.overflow = 'hidden';
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('d', d);
   path.setAttribute('fill', fill.type === 'solid' ? colorToCss(fill.color) : 'none');
@@ -236,9 +239,12 @@ function renderGroup(shape: GroupShape, deps: RenderDeps): HTMLElement {
   inner.style.top = '0';
   inner.style.transformOrigin = '0 0';
 
-  const sx = (shape.transform?.w ?? shape.childOffset.w) / (shape.childOffset.w || 1);
-  const sy = (shape.transform?.h ?? shape.childOffset.h) / (shape.childOffset.h || 1);
-  inner.style.transform = `scale(${sx}, ${sy}) translate(${-shape.childOffset.x}px, ${-shape.childOffset.y}px)`;
+  // Map the child coordinate space (chOff/chExt) onto the group box (off/ext).
+  // Guard against a missing/degenerate child extent producing an enormous scale.
+  const co = shape.childOffset;
+  const sx = co.w > 1 && shape.transform ? shape.transform.w / co.w : 1;
+  const sy = co.h > 1 && shape.transform ? shape.transform.h / co.h : 1;
+  inner.style.transform = `scale(${sx}, ${sy}) translate(${-co.x}px, ${-co.y}px)`;
 
   for (const childShape of shape.children) {
     const childEl = renderShape(childShape, deps);
@@ -270,7 +276,6 @@ function renderTable(table: Table, deps: RenderDeps): HTMLTableElement {
   tbl.style.borderCollapse = 'collapse';
   tbl.style.tableLayout = 'fixed';
   tbl.style.width = '100%';
-  tbl.style.height = '100%';
 
   const colgroup = document.createElement('colgroup');
   for (const w of table.colWidths) {
@@ -282,12 +287,14 @@ function renderTable(table: Table, deps: RenderDeps): HTMLTableElement {
 
   table.rows.forEach((row, r) => {
     const tr = document.createElement('tr');
+    // The XML row height is a minimum; the row grows to fit its content,
+    // matching PowerPoint (cell text is rendered in normal flow below).
     tr.style.height = `${table.rowHeights[r] ?? 0}px`;
     for (const cell of row) {
       if (cell === null) continue;
       const td = document.createElement('td');
-      td.style.verticalAlign = 'middle';
       td.style.padding = '0';
+      td.style.verticalAlign = cell.text ? anchorToValign(cell.text.anchor) : 'top';
       if (cell.colSpan > 1) td.colSpan = cell.colSpan;
       if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
       applyFillBackground(td, cell.fill, deps);
@@ -296,7 +303,7 @@ function renderTable(table: Table, deps: RenderDeps): HTMLTableElement {
       if (b.r) td.style.borderRight = cssBorder(b.r);
       if (b.t) td.style.borderTop = cssBorder(b.t);
       if (b.b) td.style.borderBottom = cssBorder(b.b);
-      if (cell.text) td.appendChild(renderTextBody(cell.text, deps));
+      if (cell.text) td.appendChild(renderTextBody(cell.text, deps, true));
       tr.appendChild(td);
     }
     tbl.appendChild(tr);
@@ -308,19 +315,31 @@ function cssBorder(s: Stroke): string {
   return `${s.width}px solid ${colorToCss(s.color)}`;
 }
 
-function renderTextBody(body: TextBody, _deps: RenderDeps): HTMLDivElement {
+/**
+ * Render a text body. In the default (shape) mode the box is absolutely
+ * positioned and uses flex for vertical anchoring. In `flow` mode (table cells)
+ * it's a normal-flow block with the insets as padding, so the cell — and its
+ * table row — grows to fit the content, just like PowerPoint.
+ */
+function renderTextBody(body: TextBody, _deps: RenderDeps, flow = false): HTMLDivElement {
   const box = document.createElement('div');
-  box.style.position = 'absolute';
-  box.style.left = `${body.insets.l}px`;
-  box.style.top = `${body.insets.t}px`;
-  box.style.right = `${body.insets.r}px`;
-  box.style.bottom = `${body.insets.b}px`;
-  box.style.display = 'flex';
-  box.style.flexDirection = 'column';
-  box.style.justifyContent =
-    body.anchor === 'ctr' ? 'center' : body.anchor === 'bottom' ? 'flex-end' : 'flex-start';
-  box.style.overflow = 'hidden';
   box.style.boxSizing = 'border-box';
+  if (flow) {
+    box.style.padding = `${body.insets.t}px ${body.insets.r}px ${body.insets.b}px ${body.insets.l}px`;
+  } else {
+    box.style.position = 'absolute';
+    box.style.left = `${body.insets.l}px`;
+    box.style.top = `${body.insets.t}px`;
+    box.style.right = `${body.insets.r}px`;
+    box.style.bottom = `${body.insets.b}px`;
+    box.style.display = 'flex';
+    box.style.flexDirection = 'column';
+    box.style.justifyContent =
+      body.anchor === 'ctr' ? 'center' : body.anchor === 'bottom' ? 'flex-end' : 'flex-start';
+    // PowerPoint shows text that overflows its box (the "do not autofit" default)
+    // rather than clipping it; only the slide edge clips.
+    box.style.overflow = 'visible';
+  }
 
   // Track auto-number counters per level.
   const counters: number[] = [];
@@ -328,6 +347,10 @@ function renderTextBody(body: TextBody, _deps: RenderDeps): HTMLDivElement {
     box.appendChild(renderParagraph(para, body, counters));
   }
   return box;
+}
+
+function anchorToValign(anchor: TextBody['anchor']): string {
+  return anchor === 'ctr' ? 'middle' : anchor === 'bottom' ? 'bottom' : 'top';
 }
 
 function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): HTMLDivElement {
@@ -402,7 +425,11 @@ function renderRun(run: TextRun, fontScale: number | undefined): HTMLElement {
     span.style.fontSize = `${ptToPx(pt)}px`;
   }
   if (run.color) span.style.color = colorToCss(run.color);
-  if (run.font) span.style.fontFamily = `"${run.font}", sans-serif`;
+  if (run.font) span.style.fontFamily = `"${run.font}", Arial, Helvetica, sans-serif`;
+  if (run.highlight) span.style.backgroundColor = colorToCss(run.highlight);
+  if (run.letterSpacingPt) span.style.letterSpacing = `${ptToPx(run.letterSpacingPt)}px`;
+  if (run.caps === 'all') span.style.textTransform = 'uppercase';
+  else if (run.caps === 'small') span.style.fontVariant = 'small-caps';
   if (run.baseline) {
     span.style.verticalAlign = run.baseline > 0 ? 'super' : 'sub';
     span.style.fontSize = span.style.fontSize || 'smaller';

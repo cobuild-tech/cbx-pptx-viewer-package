@@ -24,6 +24,9 @@ export interface ResolvedRunProps {
   color?: Color;
   font?: string;
   baseline?: number;
+  highlight?: Color;
+  letterSpacingPt?: number;
+  caps?: 'all' | 'small';
 }
 
 export interface ResolvedParaProps {
@@ -69,11 +72,20 @@ function runPropsFrom(
   if (strike !== undefined) props.strike = strike !== 'noStrike';
   const baseline = attrNum(rPr, 'baseline');
   if (baseline !== undefined) props.baseline = baseline / 1000;
+  const spc = attrNum(rPr, 'spc');
+  if (spc !== undefined) props.letterSpacingPt = spc / 100;
+  const cap = attr(rPr, 'cap');
+  if (cap === 'all' || cap === 'small') props.caps = cap;
 
   const solidFill = child(rPr, 'solidFill');
   if (solidFill) {
     const color = resolveContainerColor(solidFill, ctx);
     if (color) props.color = color;
+  }
+  const highlight = child(rPr, 'highlight');
+  if (highlight) {
+    const color = resolveContainerColor(highlight, ctx);
+    if (color) props.highlight = color;
   }
   const typeface = attr(child(rPr, 'latin'), 'typeface');
   const font = resolveFont(typeface, ctx.theme);

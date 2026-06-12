@@ -63,6 +63,12 @@ export interface TextRun {
   font?: string;
   /** Super/subscript as a percentage (positive = super, negative = sub). */
   baseline?: number;
+  /** Highlighter color behind the run text (`<a:highlight>`). */
+  highlight?: Color;
+  /** Character spacing in points (`spc`, can be negative). */
+  letterSpacingPt?: number;
+  /** Small caps / all caps (`cap` attribute). */
+  caps?: 'all' | 'small';
   hyperlink?: string;
 }
 
@@ -205,4 +211,18 @@ export interface Slide {
 export interface SlideSize {
   wPx: number;
   hPx: number;
+}
+
+/** One variant (weight/style) of an embedded font, pointing at its font part. */
+export interface EmbeddedFontFace {
+  weight: number;
+  style: 'normal' | 'italic';
+  /** Font part path inside the package (e.g. ppt/fonts/font1.fntdata). */
+  part: string;
+}
+
+/** An embedded typeface and its available variants (from <p:embeddedFontLst>). */
+export interface EmbeddedFont {
+  typeface: string;
+  faces: EmbeddedFontFace[];
 }

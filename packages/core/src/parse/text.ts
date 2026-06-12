@@ -132,5 +132,8 @@ function toRun(props: ReturnType<TextStyleChain['runProps']>): TextRun {
   if (props.color !== undefined) run.color = props.color;
   if (props.font !== undefined) run.font = props.font;
   if (props.baseline !== undefined) run.baseline = props.baseline;
+  if (props.highlight !== undefined) run.highlight = props.highlight;
+  if (props.letterSpacingPt !== undefined) run.letterSpacingPt = props.letterSpacingPt;
+  if (props.caps !== undefined) run.caps = props.caps;
   return run;
 }

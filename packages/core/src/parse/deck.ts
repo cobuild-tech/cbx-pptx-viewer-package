@@ -10,7 +10,7 @@ import { OpcPackage } from '../opc/package.js';
 import { RelType } from '../opc/relTypes.js';
 import { child, children, attr, attrNum, type XmlNode } from '../xml.js';
 import { emuToPx } from '../units.js';
-import type { Fill, Slide, SlideSize } from '../model.js';
+import type { Fill, Slide, SlideSize, EmbeddedFont } from '../model.js';
 import { parseTheme, type ColorContext, type Theme } from '../resolve/color.js';
 import { type ParseScope, parseFill } from '../resolve/fill.js';
 import { findColorEl, resolveColorEl } from '../resolve/color.js';
@@ -35,13 +35,21 @@ const DEFAULT_CLR_MAP: Record<string, string> = {
 export class Deck {
   readonly size: SlideSize;
   readonly slides: Slide[];
+  /** Fonts embedded in the package, to install via the FontFace API. */
+  readonly embeddedFonts: EmbeddedFont[];
   private readonly pkg: OpcPackage;
   private readonly urlCache = new Map<string, string>();
 
-  private constructor(pkg: OpcPackage, size: SlideSize, slides: Slide[]) {
+  private constructor(
+    pkg: OpcPackage,
+    size: SlideSize,
+    slides: Slide[],
+    embeddedFonts: EmbeddedFont[],
+  ) {
     this.pkg = pkg;
     this.size = size;
     this.slides = slides;
+    this.embeddedFonts = embeddedFonts;
   }
 
   static load(data: ArrayBuffer | Uint8Array): Deck {
@@ -57,7 +65,13 @@ export class Deck {
     const slides: Slide[] = slideParts.map((part, index) =>
       buildSlide(pkg, part, index),
     );
-    return new Deck(pkg, size, slides);
+    const embeddedFonts = readEmbeddedFonts(pkg, presPart, presXml);
+    return new Deck(pkg, size, slides, embeddedFonts);
+  }
+
+  /** Raw bytes of an embedded font part, for FontFace registration. */
+  fontBytes(part: string): Uint8Array | undefined {
+    return this.pkg.getBytes(part);
   }
 
   /** Object URL for an embedded media part (cached). Browser only. */
@@ -87,6 +101,37 @@ function readSlideSize(presXml: XmlNode): SlideSize {
     wPx: emuToPx(attrNum(sldSz, 'cx') ?? 9144000),
     hPx: emuToPx(attrNum(sldSz, 'cy') ?? 6858000),
   };
+}
+
+/**
+ * Parse `<p:embeddedFontLst>` into typeface -> font-part mappings. Each
+ * embedded font may carry regular/bold/italic/boldItalic variants, referenced
+ * by relationship id against presentation.xml's rels.
+ */
+function readEmbeddedFonts(
+  pkg: OpcPackage,
+  presPart: string,
+  presXml: XmlNode,
+): EmbeddedFont[] {
+  const variants: Array<[string, number, 'normal' | 'italic']> = [
+    ['regular', 400, 'normal'],
+    ['bold', 700, 'normal'],
+    ['italic', 400, 'italic'],
+    ['boldItalic', 700, 'italic'],
+  ];
+  const out: EmbeddedFont[] = [];
+  for (const ef of children(child(presXml, 'embeddedFontLst'), 'embeddedFont')) {
+    const typeface = attr(child(ef, 'font'), 'typeface');
+    if (!typeface) continue;
+    const faces = [];
+    for (const [tag, weight, style] of variants) {
+      const rId = attr(child(ef, tag), 'r:id');
+      const part = rId ? pkg.resolveRel(presPart, rId)?.target : undefined;
+      if (part) faces.push({ weight, style, part });
+    }
+    if (faces.length) out.push({ typeface, faces });
+  }
+  return out;
 }
 
 function readSlideOrder(pkg: OpcPackage, presPart: string, presXml: XmlNode): string[] {

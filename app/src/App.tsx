@@ -43,7 +43,7 @@ export function App() {
 
       <main style={main}>
         {file ? (
-          <PptxViewer src={file} fit="contain" style={{ height: '100%' }} />
+          <PptxViewer src={file} style={{ flex: 1, minHeight: 0 }} />
         ) : (
           <div
             style={{ ...dropZone, borderColor: dragging ? '#7aa2f7' : '#555' }}

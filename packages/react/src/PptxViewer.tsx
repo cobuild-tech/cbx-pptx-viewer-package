@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Viewer, type Deck, type FitMode } from '@pptx-viewer/core';
+import { Viewer, type Deck } from '@pptx-viewer/core';
 import { useDeck, type DeckSource } from './useDeck.js';
 
 export interface PptxViewerHandle {
@@ -13,7 +13,6 @@ export interface PptxViewerHandle {
 export interface PptxViewerProps {
   /** A File (e.g. from an <input>), ArrayBuffer, or Uint8Array. */
   src: DeckSource;
-  fit?: FitMode;
   /** Show the built-in navigation toolbar. Default true. */
   toolbar?: boolean;
   className?: string;
@@ -24,7 +23,7 @@ export interface PptxViewerProps {
 }
 
 export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function PptxViewer(
-  { src, fit = 'contain', toolbar = true, className, style, onLoad, onError, onSlideChange },
+  { src, toolbar = true, className, style, onLoad, onError, onSlideChange },
   ref,
 ) {
   const { deck, loading, error } = useDeck(src);
@@ -41,7 +40,6 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
     if (!deck || !stageRef.current) return;
     onLoad?.(deck);
     const viewer = new Viewer(deck, stageRef.current, {
-      fit,
       onChange: (i, c) => {
         setIndex(i);
         setCount(c);
@@ -53,8 +51,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       viewer.destroy();
       viewerRef.current = null;
     };
-    // fit is read once at construction; re-create if it changes.
-  }, [deck, fit]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deck]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useImperativeHandle(
     ref,
@@ -69,7 +66,10 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
 
   return (
     <div className={className} style={{ display: 'flex', flexDirection: 'column', ...style }}>
-      <div ref={stageRef} style={{ flex: 1, minHeight: 0, background: '#525659' }} />
+      {/* The viewer self-sizes to the slide's aspect ratio; this area scrolls. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', background: '#525659' }}>
+        <div ref={stageRef} />
+      </div>
       {loading && <div style={statusStyle}>Loading…</div>}
       {error && <div style={{ ...statusStyle, color: '#e57373' }}>Error: {error.message}</div>}
       {toolbar && deck && (

@@ -74,15 +74,16 @@ function App() {
     <>
       <input type="file" accept=".pptx"
         onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-      {file && <PptxViewer src={file} fit="contain" style={{ height: '100vh' }} />}
+      {file && <PptxViewer src={file} />}
     </>
   );
 }
 ```
 
-`src` accepts a `File`, `ArrayBuffer`, or `Uint8Array`. The component shows a
-built-in prev/next toolbar (`toolbar={false}` to hide) and exposes
-`next()` / `prev()` / `goTo()` via a ref.
+`src` accepts a `File`, `ArrayBuffer`, or `Uint8Array`. The viewer **self-sizes
+to the slide's true aspect ratio** (fills the available width, height follows) —
+you don't pass a fixed size or fit mode. It shows a built-in prev/next toolbar
+(`toolbar={false}` to hide) and exposes `next()` / `prev()` / `goTo()` via a ref.
 
 ### Framework-agnostic core
 
@@ -90,7 +91,7 @@ built-in prev/next toolbar (`toolbar={false}` to hide) and exposes
 import { loadPptx, createViewer } from '@pptx-viewer/core';
 
 const deck = loadPptx(arrayBuffer);
-const viewer = createViewer(deck, document.getElementById('stage')!, { fit: 'contain' });
+const viewer = createViewer(deck, document.getElementById('stage')!);
 viewer.next();
 viewer.goTo(3);
 

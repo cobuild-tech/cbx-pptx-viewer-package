@@ -13,6 +13,7 @@ export const RelType = {
   Chart: `${OFFICE}/chart`,
   Hyperlink: `${OFFICE}/hyperlink`,
   Diagram: `${OFFICE}/diagramData`,
+  Font: `${OFFICE}/font`,
 } as const;
 
 export type RelTypeValue = (typeof RelType)[keyof typeof RelType];

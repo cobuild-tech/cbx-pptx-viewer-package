@@ -23,11 +23,24 @@ function buildDeck(): Uint8Array {
       `<p:presentation xmlns:p="p" xmlns:r="r">
         <p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst>
         <p:sldSz cx="12192000" cy="6858000"/>
+        <p:embeddedFontLst>
+          <p:embeddedFont>
+            <p:font typeface="BrandFont"/>
+            <p:regular r:id="rIdF1"/>
+            <p:bold r:id="rIdF2"/>
+          </p:embeddedFont>
+        </p:embeddedFontLst>
       </p:presentation>`,
     ),
     'ppt/_rels/presentation.xml.rels': strToU8(
-      rels(`<Relationship Id="rId1" Type="${RelType.Slide}" Target="slides/slide1.xml"/>`),
+      rels(
+        `<Relationship Id="rId1" Type="${RelType.Slide}" Target="slides/slide1.xml"/>` +
+          `<Relationship Id="rIdF1" Type="${RelType.Font}" Target="fonts/font1.fntdata"/>` +
+          `<Relationship Id="rIdF2" Type="${RelType.Font}" Target="fonts/font2.fntdata"/>`,
+      ),
     ),
+    'ppt/fonts/font1.fntdata': new Uint8Array([0x00, 0x01, 0x00, 0x00]),
+    'ppt/fonts/font2.fntdata': new Uint8Array([0x00, 0x01, 0x00, 0x00]),
     'ppt/slides/slide1.xml': strToU8(
       `<p:sld xmlns:p="p" xmlns:a="a"><p:cSld><p:spTree>
         <p:sp>
@@ -108,6 +121,17 @@ describe('Deck pipeline', () => {
 
   it('loads exactly one slide', () => {
     expect(deck.slides).toHaveLength(1);
+  });
+
+  it('parses embedded fonts with their variants and resolved parts', () => {
+    expect(deck.embeddedFonts).toHaveLength(1);
+    const font = deck.embeddedFonts[0]!;
+    expect(font.typeface).toBe('BrandFont');
+    expect(font.faces).toEqual([
+      { weight: 400, style: 'normal', part: 'ppt/fonts/font1.fntdata' },
+      { weight: 700, style: 'normal', part: 'ppt/fonts/font2.fntdata' },
+    ]);
+    expect(deck.fontBytes('ppt/fonts/font1.fntdata')).toBeInstanceOf(Uint8Array);
   });
 
   it('resolves the slide background through the master scheme color', () => {
