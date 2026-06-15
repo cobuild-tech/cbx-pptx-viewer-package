@@ -150,7 +150,7 @@ function customGeomSvg(
   ph: number,
   w: number,
   h: number,
-  fill: Fill,
+  fill: Fill | undefined,
   stroke: Stroke | undefined,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
@@ -165,7 +165,7 @@ function customGeomSvg(
   svg.style.overflow = 'hidden';
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('d', d);
-  path.setAttribute('fill', fill.type === 'solid' ? colorToCss(fill.color) : 'none');
+  path.setAttribute('fill', fill?.type === 'solid' ? colorToCss(fill.color) : 'none');
   if (stroke) {
     path.setAttribute('stroke', colorToCss(stroke.color));
     path.setAttribute('stroke-width', `${stroke.width}`);
@@ -180,12 +180,18 @@ function renderConnector(shape: ConnectorShape, _deps: RenderDeps): HTMLElement 
   const el = positioned(shape.transform);
   const w = shape.transform?.w ?? 0;
   const h = shape.transform?.h ?? 0;
-  if (shape.stroke) {
-    const d =
-      shape.geom.type === 'preset'
-        ? presetPath(shape.geom.preset, w, h, shape.geom.adjust)
-        : shape.geom.paths[0]?.d ?? `M0,0 L${w},${h}`;
+  if (!shape.stroke) return el;
+  if (shape.geom.type === 'preset') {
+    // Preset connector geometry is already in the shape's box (px) space.
+    const d = presetPath(shape.geom.preset, w, h, shape.geom.adjust);
     el.appendChild(strokeOverlay(d, w, h, shape.stroke, false));
+  } else {
+    // Custom geometry lives in the path's own EMU coordinate space; it must be
+    // scaled into the box via a viewBox (as for shapes), otherwise the raw
+    // path coordinates draw enormous strokes across the slide.
+    for (const p of shape.geom.paths) {
+      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, undefined, shape.stroke));
+    }
   }
   return el;
 }

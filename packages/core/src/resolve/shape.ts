@@ -22,7 +22,7 @@ import type {
   FrameShape,
 } from '../model.js';
 import { type ColorContext, type Theme, resolveColorEl, findColorEl } from './color.js';
-import { type ParseScope, parseFill, parseStroke } from './fill.js';
+import { type ParseScope, parseFill, parseStroke, strokeFromLn } from './fill.js';
 import { parseCustomGeometry } from '../geometry/custom.js';
 import { parseTextBody } from '../parse/text.js';
 import { TextStyleChain } from './textStyles.js';
@@ -66,11 +66,12 @@ export function buildShapes(
   ctx: SlideBuildCtx,
   scope: ParseScope,
   opts: BuildOpts = {},
+  groupFill?: Fill,
 ): Shape[] {
   const out: Shape[] = [];
   for (const node of expandChildren(tree)) {
     if (opts.skipPlaceholders && placeholderOf(node)) continue;
-    const shape = buildShape(node, ctx, scope);
+    const shape = buildShape(node, ctx, scope, groupFill);
     if (shape) out.push(shape);
   }
   return out;
@@ -88,14 +89,19 @@ function* expandChildren(tree: XmlNode): Generator<XmlNode> {
   }
 }
 
-function buildShape(node: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): Shape | null {
+function buildShape(
+  node: XmlNode,
+  ctx: SlideBuildCtx,
+  scope: ParseScope,
+  groupFill?: Fill,
+): Shape | null {
   switch (localName(node.name)) {
     case 'sp':
-      return buildSp(node, ctx, scope);
+      return buildSp(node, ctx, scope, groupFill);
     case 'pic':
       return buildPic(node, ctx, scope);
     case 'grpSp':
-      return buildGrp(node, ctx, scope);
+      return buildGrp(node, ctx, scope, groupFill);
     case 'cxnSp':
       return buildCxn(node, scope);
     case 'graphicFrame':
@@ -103,6 +109,11 @@ function buildShape(node: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): Shape
     default:
       return null;
   }
+}
+
+/** True if a shape's `<spPr>` declares `<a:grpFill/>` (inherit the group's fill). */
+function hasGrpFill(spPr: XmlNode | undefined): boolean {
+  return !!spPr && spPr.children.some((c) => localName(c.name) === 'grpFill');
 }
 
 function parseXfrmEl(xfrm: XmlNode | undefined): Transform | undefined {
@@ -159,7 +170,12 @@ function styleRefColor(ref: XmlNode | undefined, ctx: SlideBuildCtx): Fill | und
   return color ? { type: 'solid', color } : undefined;
 }
 
-function buildSp(sp: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): PresetShape {
+function buildSp(
+  sp: XmlNode,
+  ctx: SlideBuildCtx,
+  scope: ParseScope,
+  groupFill?: Fill,
+): PresetShape {
   const spPr = child(sp, 'spPr');
   const ph = placeholderOf(sp);
   const layoutPh = ph ? matchPlaceholder(ph, ctx.layoutPhs) : undefined;
@@ -171,9 +187,28 @@ function buildSp(sp: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): PresetShap
     parseXfrmEl(child(child(masterPh?.sp, 'spPr'), 'xfrm'));
 
   const style = child(sp, 'style');
+  // `<a:grpFill/>` inherits the enclosing group's fill; it must take precedence
+  // over the shape's style fillRef (which would otherwise paint it wrongly).
   const fill: Fill =
-    parseFill(spPr, scope) ?? styleRefColor(child(style, 'fillRef'), ctx) ?? { type: 'none' };
-  const stroke = parseStroke(spPr, scope) ?? styleStroke(child(style, 'lnRef'), ctx);
+    parseFill(spPr, scope) ??
+    (hasGrpFill(spPr) ? groupFill : undefined) ??
+    styleRefColor(child(style, 'fillRef'), ctx) ??
+    { type: 'none' };
+  // Outline precedence (PowerPoint): an explicit `<a:ln>` wins over the style
+  // `<a:lnRef>`. `<a:ln><a:noFill/>` means "no outline" and suppresses the style;
+  // an `<a:ln w="..">` with no color of its own still takes the style's color
+  // (but its own width). Only when there is no `<a:ln>` at all do we use lnRef.
+  const ln = child(spPr, 'ln');
+  let stroke = strokeFromLn(ln, scope);
+  if (!stroke && ln && !child(ln, 'noFill')) {
+    const styled = styleStroke(child(style, 'lnRef'), ctx);
+    if (styled) {
+      const wEmu = attrNum(ln, 'w');
+      stroke = wEmu !== undefined ? { ...styled, width: Math.max(0.5, emuToPx(wEmu)) } : styled;
+    }
+  } else if (!stroke && !ln) {
+    stroke = styleStroke(child(style, 'lnRef'), ctx);
+  }
 
   const shape: PresetShape = {
     kind: 'shape',
@@ -261,16 +296,25 @@ function buildPic(pic: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): PictureS
   return shape;
 }
 
-function buildGrp(grp: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): GroupShape | null {
+function buildGrp(
+  grp: XmlNode,
+  ctx: SlideBuildCtx,
+  scope: ParseScope,
+  parentFill?: Fill,
+): GroupShape | null {
   const grpSpPr = child(grp, 'grpSpPr');
   const xfrm = child(grpSpPr, 'xfrm');
   const transform = parseXfrmEl(xfrm);
   const chOff = child(xfrm, 'chOff');
   const chExt = child(xfrm, 'chExt');
 
+  // The group's own fill is what `<a:grpFill/>` children resolve to; a nested
+  // group with its own grpFill inherits the parent group's fill in turn.
+  const groupFill = parseFill(grpSpPr, scope) ?? (hasGrpFill(grpSpPr) ? parentFill : undefined);
+
   const shape: GroupShape = {
     kind: 'group',
-    children: buildShapes(grp, ctx, scope),
+    children: buildShapes(grp, ctx, scope, {}, groupFill),
     childOffset: {
       x: emuToPx(attrNum(chOff, 'x') ?? 0),
       y: emuToPx(attrNum(chOff, 'y') ?? 0),
