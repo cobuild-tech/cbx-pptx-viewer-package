@@ -135,7 +135,50 @@ function parseXfrmEl(xfrm: XmlNode | undefined): Transform | undefined {
 }
 
 function parseGeometry(spPr: XmlNode | undefined): Geometry {
-  const prst = child(spPr, 'prstGeom');
+  return resolveGeometry(spPr, undefined, undefined);
+}
+
+function resolveTransform(
+  spPr: XmlNode | undefined,
+  layoutSpPr: XmlNode | undefined,
+  masterSpPr: XmlNode | undefined,
+): Transform | undefined {
+  const xfrm = child(spPr, 'xfrm');
+  const lxfrm = child(layoutSpPr, 'xfrm');
+  const mxfrm = child(masterSpPr, 'xfrm');
+
+  if (!xfrm && !lxfrm && !mxfrm) return undefined;
+
+  const off = child(xfrm, 'off') ?? child(lxfrm, 'off') ?? child(mxfrm, 'off');
+  const ext = child(xfrm, 'ext') ?? child(lxfrm, 'ext') ?? child(mxfrm, 'ext');
+
+  if (!off || !ext) return undefined;
+
+  const t: Transform = {
+    x: emuToPx(attrNum(off, 'x') ?? 0),
+    y: emuToPx(attrNum(off, 'y') ?? 0),
+    w: emuToPx(attrNum(ext, 'cx') ?? 0),
+    h: emuToPx(attrNum(ext, 'cy') ?? 0),
+  };
+
+  const rot = attrNum(xfrm, 'rot') ?? attrNum(lxfrm, 'rot') ?? attrNum(mxfrm, 'rot');
+  if (rot) t.rot = angleToDeg(rot);
+
+  const flipH = attr(xfrm, 'flipH') ?? attr(lxfrm, 'flipH') ?? attr(mxfrm, 'flipH');
+  if (flipH === '1' || flipH === 'true') t.flipH = true;
+
+  const flipV = attr(xfrm, 'flipV') ?? attr(lxfrm, 'flipV') ?? attr(mxfrm, 'flipV');
+  if (flipV === '1' || flipV === 'true') t.flipV = true;
+
+  return t;
+}
+
+function resolveGeometry(
+  spPr: XmlNode | undefined,
+  layoutSpPr: XmlNode | undefined,
+  masterSpPr: XmlNode | undefined,
+): Geometry {
+  const prst = child(spPr, 'prstGeom') ?? child(layoutSpPr, 'prstGeom') ?? child(masterSpPr, 'prstGeom');
   if (prst) {
     return {
       type: 'preset',
@@ -143,7 +186,7 @@ function parseGeometry(spPr: XmlNode | undefined): Geometry {
       adjust: parseAdjust(child(prst, 'avLst')),
     };
   }
-  const cust = child(spPr, 'custGeom');
+  const cust = child(spPr, 'custGeom') ?? child(layoutSpPr, 'custGeom') ?? child(masterSpPr, 'custGeom');
   if (cust) return { type: 'custom', paths: parseCustomGeometry(cust) };
   return { type: 'preset', preset: 'rect', adjust: {} };
 }
@@ -170,6 +213,40 @@ function styleRefColor(ref: XmlNode | undefined, ctx: SlideBuildCtx): Fill | und
   return color ? { type: 'solid', color } : undefined;
 }
 
+function resolveStroke(
+  spPr: XmlNode | undefined,
+  style: XmlNode | undefined,
+  layoutSpPr: XmlNode | undefined,
+  layoutStyle: XmlNode | undefined,
+  masterSpPr: XmlNode | undefined,
+  masterStyle: XmlNode | undefined,
+  ctx: SlideBuildCtx,
+): Stroke | undefined {
+  const ln = child(spPr, 'ln') ?? child(layoutSpPr, 'ln') ?? child(masterSpPr, 'ln');
+  const activeStyle = child(spPr, 'ln') ? style : 
+                       (child(layoutSpPr, 'ln') ? layoutStyle : masterStyle);
+  const activeScope = child(spPr, 'ln') ? ctx.scopes.slide : 
+                       (child(layoutSpPr, 'ln') ? ctx.scopes.layout : ctx.scopes.master);
+
+  if (ln) {
+    if (child(ln, 'noFill')) return undefined;
+    
+    let stroke = strokeFromLn(ln, activeScope);
+    if (stroke) return stroke;
+    
+    const lnRef = child(activeStyle ?? style ?? layoutStyle ?? masterStyle, 'lnRef');
+    const styled = styleStroke(lnRef, ctx);
+    if (styled) {
+      const wEmu = attrNum(ln, 'w');
+      return wEmu !== undefined ? { ...styled, width: Math.max(0.5, emuToPx(wEmu)) } : styled;
+    }
+    return undefined;
+  }
+  
+  const lnRef = child(style, 'lnRef') ?? child(layoutStyle, 'lnRef') ?? child(masterStyle, 'lnRef');
+  return styleStroke(lnRef, ctx);
+}
+
 function buildSp(
   sp: XmlNode,
   ctx: SlideBuildCtx,
@@ -181,38 +258,46 @@ function buildSp(
   const layoutPh = ph ? matchPlaceholder(ph, ctx.layoutPhs) : undefined;
   const masterPh = ph ? matchPlaceholder(ph, ctx.masterPhs) : undefined;
 
-  const transform =
-    parseXfrmEl(child(spPr, 'xfrm')) ??
-    parseXfrmEl(child(child(layoutPh?.sp, 'spPr'), 'xfrm')) ??
-    parseXfrmEl(child(child(masterPh?.sp, 'spPr'), 'xfrm'));
+  const layoutSpPr = child(layoutPh?.sp, 'spPr');
+  const masterSpPr = child(masterPh?.sp, 'spPr');
+  const layoutStyle = child(layoutPh?.sp, 'style');
+  const masterStyle = child(masterPh?.sp, 'style');
+
+  const transform = resolveTransform(spPr, layoutSpPr, masterSpPr);
 
   const style = child(sp, 'style');
-  // `<a:grpFill/>` inherits the enclosing group's fill; it must take precedence
-  // over the shape's style fillRef (which would otherwise paint it wrongly).
-  const fill: Fill =
-    parseFill(spPr, scope) ??
-    (hasGrpFill(spPr) ? groupFill : undefined) ??
-    styleRefColor(child(style, 'fillRef'), ctx) ??
-    { type: 'none' };
-  // Outline precedence (PowerPoint): an explicit `<a:ln>` wins over the style
-  // `<a:lnRef>`. `<a:ln><a:noFill/>` means "no outline" and suppresses the style;
-  // an `<a:ln w="..">` with no color of its own still takes the style's color
-  // (but its own width). Only when there is no `<a:ln>` at all do we use lnRef.
-  const ln = child(spPr, 'ln');
-  let stroke = strokeFromLn(ln, scope);
-  if (!stroke && ln && !child(ln, 'noFill')) {
-    const styled = styleStroke(child(style, 'lnRef'), ctx);
-    if (styled) {
-      const wEmu = attrNum(ln, 'w');
-      stroke = wEmu !== undefined ? { ...styled, width: Math.max(0.5, emuToPx(wEmu)) } : styled;
-    }
-  } else if (!stroke && !ln) {
-    stroke = styleStroke(child(style, 'lnRef'), ctx);
+  
+  // Resolve fill with inheritance
+  let fill: Fill | undefined = parseFill(spPr, scope);
+  if (fill === undefined && hasGrpFill(spPr)) {
+    fill = groupFill;
   }
+  if (fill === undefined && layoutSpPr) {
+    fill = parseFill(layoutSpPr, ctx.scopes.layout);
+    if (fill === undefined && hasGrpFill(layoutSpPr)) {
+      fill = groupFill;
+    }
+  }
+  if (fill === undefined && masterSpPr) {
+    fill = parseFill(masterSpPr, ctx.scopes.master);
+    if (fill === undefined && hasGrpFill(masterSpPr)) {
+      fill = groupFill;
+    }
+  }
+  if (fill === undefined) {
+    const fRef = child(style, 'fillRef') ?? child(layoutStyle, 'fillRef') ?? child(masterStyle, 'fillRef');
+    fill = styleRefColor(fRef, ctx);
+  }
+  if (fill === undefined) {
+    fill = { type: 'none' };
+  }
+
+  // Resolve stroke with inheritance
+  const stroke = resolveStroke(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
 
   const shape: PresetShape = {
     kind: 'shape',
-    geom: parseGeometry(spPr),
+    geom: resolveGeometry(spPr, layoutSpPr, masterSpPr),
     fill,
   };
   if (transform) shape.transform = transform;
@@ -269,19 +354,24 @@ function buildPic(pic: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): PictureS
   const ph = placeholderOf(pic);
   const layoutPh = ph ? matchPlaceholder(ph, ctx.layoutPhs) : undefined;
   const masterPh = ph ? matchPlaceholder(ph, ctx.masterPhs) : undefined;
-  const transform =
-    parseXfrmEl(child(spPr, 'xfrm')) ??
-    parseXfrmEl(child(child(layoutPh?.sp, 'spPr'), 'xfrm')) ??
-    parseXfrmEl(child(child(masterPh?.sp, 'spPr'), 'xfrm'));
+
+  const layoutSpPr = child(layoutPh?.sp, 'spPr');
+  const masterSpPr = child(masterPh?.sp, 'spPr');
+  const layoutStyle = child(layoutPh?.sp, 'style');
+  const masterStyle = child(masterPh?.sp, 'style');
+
+  const transform = resolveTransform(spPr, layoutSpPr, masterSpPr);
   if (transform) shape.transform = transform;
   if (ph) shape.placeholder = ph;
 
   // A non-rectangular preset clips the image (e.g. picture cropped to a circle).
-  if (child(spPr, 'prstGeom') || child(spPr, 'custGeom')) {
-    shape.geom = parseGeometry(spPr);
+  if (child(spPr, 'prstGeom') || child(spPr, 'custGeom') ||
+      child(layoutSpPr, 'prstGeom') || child(layoutSpPr, 'custGeom') ||
+      child(masterSpPr, 'prstGeom') || child(masterSpPr, 'custGeom')) {
+    shape.geom = resolveGeometry(spPr, layoutSpPr, masterSpPr);
   }
 
-  const stroke = parseStroke(spPr, scope);
+  const stroke = resolveStroke(spPr, child(pic, 'style'), layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
   if (stroke) shape.stroke = stroke;
 
   const srcRect = child(blipFill, 'srcRect');

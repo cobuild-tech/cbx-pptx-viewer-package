@@ -110,7 +110,7 @@ function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement {
   } else {
     // Custom geometry: render each subpath in a scaled SVG.
     for (const p of shape.geom.paths) {
-      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, shape.fill, shape.stroke));
+      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, shape.fill, shape.stroke, deps));
     }
   }
 
@@ -144,6 +144,76 @@ function strokeOverlay(
   return svg;
 }
 
+function setupSvgFill(
+  svg: SVGSVGElement,
+  fill: Fill | undefined,
+  deps: RenderDeps,
+): string {
+  if (!fill || fill.type === 'none') return 'none';
+  if (fill.type === 'solid') return colorToCss(fill.color);
+
+  let defs = svg.querySelector('defs');
+  if (!defs) {
+    defs = document.createElementNS(SVG_NS, 'defs');
+    svg.insertBefore(defs, svg.firstChild);
+  }
+
+  const fillId = `fill-${Math.random().toString(36).slice(2, 9)}`;
+
+  if (fill.type === 'gradient') {
+    const grad = document.createElementNS(
+      SVG_NS,
+      fill.radial ? 'radialGradient' : 'linearGradient',
+    );
+    grad.setAttribute('id', fillId);
+    
+    if (!fill.radial) {
+      const angleRad = ((fill.angle ?? 0) * Math.PI) / 180;
+      const dx = Math.sin(angleRad);
+      const dy = -Math.cos(angleRad);
+      const x1 = 0.5 - dx * 0.5;
+      const y1 = 0.5 - dy * 0.5;
+      const x2 = 0.5 + dx * 0.5;
+      const y2 = 0.5 + dy * 0.5;
+      grad.setAttribute('x1', `${(x1 * 100).toFixed(1)}%`);
+      grad.setAttribute('y1', `${(y1 * 100).toFixed(1)}%`);
+      grad.setAttribute('x2', `${(x2 * 100).toFixed(1)}%`);
+      grad.setAttribute('y2', `${(y2 * 100).toFixed(1)}%`);
+    }
+
+    for (const stop of fill.stops) {
+      const s = document.createElementNS(SVG_NS, 'stop');
+      s.setAttribute('offset', `${(stop.pos * 100).toFixed(1)}%`);
+      s.setAttribute('stop-color', colorToCss(stop.color));
+      grad.appendChild(s);
+    }
+    defs.appendChild(grad);
+    return `url(#${fillId})`;
+  }
+
+  if (fill.type === 'image') {
+    const url = deps.imageUrl(fill.part);
+    if (!url) return 'none';
+
+    const pattern = document.createElementNS(SVG_NS, 'pattern');
+    pattern.setAttribute('id', fillId);
+    pattern.setAttribute('patternUnits', 'objectBoundingBox');
+    pattern.setAttribute('width', '1');
+    pattern.setAttribute('height', '1');
+
+    const img = document.createElementNS(SVG_NS, 'image');
+    img.setAttributeNS('http://www.w3.org/1999/xlink', 'href', url);
+    img.setAttribute('width', '100%');
+    img.setAttribute('height', '100%');
+    img.setAttribute('preserveAspectRatio', 'none');
+    pattern.appendChild(img);
+    defs.appendChild(pattern);
+    return `url(#${fillId})`;
+  }
+
+  return 'none';
+}
+
 function customGeomSvg(
   d: string,
   pw: number,
@@ -152,6 +222,7 @@ function customGeomSvg(
   h: number,
   fill: Fill | undefined,
   stroke: Stroke | undefined,
+  deps: RenderDeps,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('width', `${w}`);
@@ -163,9 +234,12 @@ function customGeomSvg(
   // Geometry must stay within the shape box; clipping prevents an imperfect
   // path (e.g. a spiral with an off arc) from drawing lines across the slide.
   svg.style.overflow = 'hidden';
+
+  const fillVal = setupSvgFill(svg, fill, deps);
+
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('d', d);
-  path.setAttribute('fill', fill?.type === 'solid' ? colorToCss(fill.color) : 'none');
+  path.setAttribute('fill', fillVal);
   if (stroke) {
     path.setAttribute('stroke', colorToCss(stroke.color));
     path.setAttribute('stroke-width', `${stroke.width}`);
@@ -176,7 +250,7 @@ function customGeomSvg(
   return svg;
 }
 
-function renderConnector(shape: ConnectorShape, _deps: RenderDeps): HTMLElement {
+function renderConnector(shape: ConnectorShape, deps: RenderDeps): HTMLElement {
   const el = positioned(shape.transform);
   const w = shape.transform?.w ?? 0;
   const h = shape.transform?.h ?? 0;
@@ -190,7 +264,7 @@ function renderConnector(shape: ConnectorShape, _deps: RenderDeps): HTMLElement 
     // scaled into the box via a viewBox (as for shapes), otherwise the raw
     // path coordinates draw enormous strokes across the slide.
     for (const p of shape.geom.paths) {
-      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, undefined, shape.stroke));
+      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, undefined, shape.stroke, deps));
     }
   }
   return el;
@@ -361,7 +435,7 @@ function anchorToValign(anchor: TextBody['anchor']): string {
 
 function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): HTMLDivElement {
   const p = document.createElement('div');
-  p.style.whiteSpace = 'pre-wrap';
+  p.style.whiteSpace = body.wrap ? 'pre-wrap' : 'pre';
   p.style.margin = '0';
   // Keep natural height when text exceeds the box; PowerPoint clips/overflows
   // rather than letting flexbox compress paragraphs on top of each other.
@@ -372,7 +446,14 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
       para.align === 'ctr' ? 'center' : para.align === 'r' ? 'right' : para.align === 'just' ? 'justify' : 'left';
   }
   if (para.marginLeftPx !== undefined) p.style.marginLeft = `${para.marginLeftPx}px`;
-  if (para.indentPx !== undefined) p.style.textIndent = `${para.indentPx}px`;
+  if (para.indentPx !== undefined) {
+    // A hanging indent (negative `indent`) makes room left of `marL` for a
+    // bullet. PowerPoint never renders the first line left of the paragraph's
+    // own left edge, so clamp it — otherwise a marL=0/negative-indent paragraph
+    // (e.g. a tab-stop "hang" with no bullet) spills out and clips its start.
+    const ml = para.marginLeftPx ?? 0;
+    p.style.textIndent = `${Math.max(para.indentPx, -ml)}px`;
+  }
   if (para.spaceBeforePt !== undefined) p.style.marginTop = `${ptToPx(para.spaceBeforePt)}px`;
   if (para.spaceAfterPt !== undefined) p.style.marginBottom = `${ptToPx(para.spaceAfterPt)}px`;
   if (para.lineSpacingPct !== undefined) p.style.lineHeight = `${para.lineSpacingPct}`;

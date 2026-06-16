@@ -32,6 +32,12 @@ describe('xml normalization', () => {
     expect(attrNum(child(xml, 'spPr')!.children[0], 'rot')).toBe(5400000);
   });
 
+  it('reads namespaced attributes prefix-robustly', () => {
+    const n = parseXml('<p:sldId id="256" r1:id="rId1"/>')!;
+    expect(attr(n, 'r:id')).toBe('rId1');
+    expect(attr(n, 'id')).toBe('256');
+  });
+
   it('preserves run/break order inside a paragraph (z-order semantics)', () => {
     const p = path(xml, 'txBody/p')!;
     expect(p.children.map((c) => c.name)).toEqual(['a:r', 'a:br', 'a:r']);

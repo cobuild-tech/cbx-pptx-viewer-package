@@ -110,13 +110,21 @@ export function path(node: XmlNode | undefined, p: string): XmlNode | undefined 
   return cur;
 }
 
-/** String attribute by qualified or local name. */
+/** String attribute by qualified or local name, namespace-prefix-robust. */
 export function attr(node: XmlNode | undefined, name: string): string | undefined {
   if (!node) return undefined;
   if (name in node.attrs) return node.attrs[name];
-  if (!name.includes(':')) {
-    for (const [k, v] of Object.entries(node.attrs)) {
-      if (localName(k) === name) return v;
+  const queryLocal = localName(name);
+  const queryHasPrefix = name.includes(':');
+  for (const [k, v] of Object.entries(node.attrs)) {
+    const attrLocal = localName(k);
+    const attrHasPrefix = k.includes(':');
+    if (attrLocal === queryLocal) {
+      if (queryHasPrefix) {
+        if (attrHasPrefix) return v;
+      } else {
+        return v;
+      }
     }
   }
   return undefined;
