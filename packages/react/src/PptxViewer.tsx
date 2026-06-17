@@ -66,9 +66,9 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
 
   return (
     <div className={className} style={{ display: 'flex', flexDirection: 'column', ...style }}>
-      {/* The viewer self-sizes to the slide's aspect ratio; this area scrolls. */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'auto', background: '#525659' }}>
-        <div ref={stageRef} />
+      {/* The viewer fits the slide to this area (contain) and centres it. */}
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#525659' }}>
+        <div ref={stageRef} style={{ width: '100%', height: '100%' }} />
       </div>
       {loading && <div style={statusStyle}>Loading…</div>}
       {error && <div style={{ ...statusStyle, color: '#e57373' }}>Error: {error.message}</div>}

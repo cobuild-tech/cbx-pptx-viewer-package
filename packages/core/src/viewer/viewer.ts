@@ -2,10 +2,11 @@
  * Viewer controller: mounts a {@link Deck} into a container and renders one
  * slide at a time.
  *
- * Sizing follows how embedded slide viewers work: the viewer fills its
- * container's width and derives its height from the slide's true aspect ratio.
- * It never forces a fixed size or letterboxes — the slide is rendered at its
- * real dimensions and uniformly scaled to the available width.
+ * Sizing: by default the slide is fit to the container like PowerPoint's
+ * slideshow — uniformly scaled to the largest size that fits both the
+ * container's width and height, then centred (`fit: 'contain'`). Pass
+ * `fit: 'width'` for the embedded-document style that fills the width and lets
+ * the page scroll vertically.
  *
  * On load it installs any fonts embedded in the deck (FontFace) and re-renders
  * once they're ready, so text reflows in the genuine font.
@@ -18,6 +19,12 @@ export interface ViewerOptions {
   startIndex?: number;
   /** Enable arrow-key / space navigation on the container. Default true. */
   keyboard?: boolean;
+  /**
+   * How the slide is scaled into the container. `'contain'` (default) fits the
+   * whole slide to the container and centres it; `'width'` fills the width and
+   * lets height follow the aspect ratio (the page scrolls).
+   */
+  fit?: 'contain' | 'width';
   /** Called whenever the current slide index changes. */
   onChange?: (index: number, count: number) => void;
 }
@@ -27,6 +34,7 @@ export class Viewer {
   private readonly container: HTMLElement;
   private readonly holder: HTMLDivElement;
   private readonly onChange: ViewerOptions['onChange'];
+  private readonly fit: 'contain' | 'width';
   private index = 0;
   private slideEl: HTMLElement | null = null;
   private resizeObserver: ResizeObserver | null = null;
@@ -36,14 +44,16 @@ export class Viewer {
   constructor(deck: Deck, container: HTMLElement, options: ViewerOptions = {}) {
     this.deck = deck;
     this.container = container;
+    this.fit = options.fit ?? 'contain';
     if (options.onChange) this.onChange = options.onChange;
 
     container.style.position = 'relative';
 
-    // The holder fills the container width; its height tracks the slide aspect.
+    // The holder fills the container; the slide is positioned/scaled within it.
     this.holder = document.createElement('div');
     this.holder.style.position = 'relative';
     this.holder.style.width = '100%';
+    this.holder.style.height = this.fit === 'contain' ? '100%' : 'auto';
     this.holder.style.margin = '0 auto';
     container.appendChild(this.holder);
 
@@ -76,6 +86,7 @@ export class Viewer {
 
     const el = renderSlide(slide, this.deck.size, { imageUrl: (p) => this.deck.imageUrl(p) });
     el.style.transformOrigin = 'top left';
+    el.style.position = 'absolute';
     if (this.slideEl) this.slideEl.remove();
     this.slideEl = el;
     this.holder.appendChild(el);
@@ -91,14 +102,30 @@ export class Viewer {
     this.goTo(this.index - 1);
   }
 
-  /** Scale the slide to the container width; height follows the aspect ratio. */
+  /**
+   * Scale the slide into the container. `'contain'` fits the whole slide to both
+   * dimensions and centres it; `'width'` fills the width and lets height follow.
+   */
   private applyScale(): void {
     if (!this.slideEl) return;
     const { wPx, hPx } = this.deck.size;
-    const width = this.container.clientWidth || wPx;
-    const scale = width / wPx;
+    const cw = this.container.clientWidth || wPx;
+
+    if (this.fit === 'width') {
+      const scale = cw / wPx;
+      this.slideEl.style.transform = `scale(${scale})`;
+      this.slideEl.style.left = '0px';
+      this.slideEl.style.top = '0px';
+      this.holder.style.height = `${hPx * scale}px`;
+      return;
+    }
+
+    // contain: largest scale that fits both width and height, then centre.
+    const ch = this.container.clientHeight || hPx;
+    const scale = Math.min(cw / wPx, ch / hPx);
     this.slideEl.style.transform = `scale(${scale})`;
-    this.holder.style.height = `${hPx * scale}px`;
+    this.slideEl.style.left = `${Math.max(0, (cw - wPx * scale) / 2)}px`;
+    this.slideEl.style.top = `${Math.max(0, (ch - hPx * scale) / 2)}px`;
   }
 
   private enableKeyboard(): void {

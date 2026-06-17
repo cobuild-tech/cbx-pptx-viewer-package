@@ -80,10 +80,11 @@ function App() {
 }
 ```
 
-`src` accepts a `File`, `ArrayBuffer`, or `Uint8Array`. The viewer **self-sizes
-to the slide's true aspect ratio** (fills the available width, height follows) —
-you don't pass a fixed size or fit mode. It shows a built-in prev/next toolbar
-(`toolbar={false}` to hide) and exposes `next()` / `prev()` / `goTo()` via a ref.
+`src` accepts a `File`, `ArrayBuffer`, or `Uint8Array`. By default the viewer
+**fits the whole slide to its container and centres it** — like PowerPoint's
+slideshow — scaling to the largest size that fits both the width and height. It
+shows a built-in prev/next toolbar (`toolbar={false}` to hide) and exposes
+`next()` / `prev()` / `goTo()` via a ref.
 
 ### Framework-agnostic core
 
@@ -98,6 +99,14 @@ viewer.goTo(3);
 // when done — frees the image object URLs
 viewer.destroy();
 deck.dispose();
+```
+
+Sizing defaults to `fit: 'contain'` (fit the whole slide to the container and
+centre it). Pass `fit: 'width'` for the embedded-document style that fills the
+width and lets the page scroll vertically:
+
+```ts
+createViewer(deck, stage, { fit: 'width' });
 ```
 
 ## Development
@@ -118,6 +127,23 @@ npm run build:app      # production build of the React app
 
 The app and demo are aliased directly to the packages' TypeScript source, so
 there's no build step while developing — edits to `core`/`react` hot-reload.
+
+### Comparing renderers
+
+The React app has a **Renderer** dropdown so you can view the same uploaded
+`.pptx` through this package or three third-party libraries, to compare fidelity:
+
+| Option | Package | Approach |
+| --- | --- | --- |
+| cbx-ppt-viewer (default) | `@pptx-viewer/react` | HTML/CSS DOM, this repo's parser |
+| pptx-react-viewer | [`pptx-react-viewer`](https://www.npmjs.com/package/pptx-react-viewer) | HTML/CSS, full editor (heavy deps) |
+| pptxviewjs | [`pptxviewjs`](https://www.npmjs.com/package/pptxviewjs) | `<canvas>` renderer |
+| @cyntler/react-doc-viewer | [`@cyntler/react-doc-viewer`](https://www.npmjs.com/package/@cyntler/react-doc-viewer) | embeds the MS Office Online viewer |
+
+Each third-party renderer is lazy-loaded, so its bundle only downloads when
+selected. Note `@cyntler/react-doc-viewer` renders `.pptx` via the Office Online
+viewer, which needs a **publicly reachable URL** — a locally-uploaded file
+(blob URL) won't load there.
 
 ## What's supported
 

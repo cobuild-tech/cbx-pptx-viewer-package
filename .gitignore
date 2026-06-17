@@ -3,3 +3,6 @@ dist/
 *.tsbuildinfo
 .DS_Store
 demo/dist/
+
+# Local test decks
+*.pptx
