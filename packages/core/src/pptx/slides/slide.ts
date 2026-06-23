@@ -14,7 +14,7 @@ import { parseTheme, type ColorContext, type Theme, findColorEl, resolveColorEl 
 import type { ParseScope } from '../scope.js';
 import { parseFill } from '../shapes/fill.js';
 import { indexPlaceholders } from '../shapes/placeholders.js';
-import { buildShapes, type SlideBuildCtx, type SlideScopes } from '../shapes/shape.js';
+import { buildShapes, type SlideBuildCtx, type SlideScopes, type PartResolver } from '../shapes/shape.js';
 
 const DEFAULT_CLR_MAP: Record<string, string> = {
   bg1: 'lt1',
@@ -53,12 +53,20 @@ export function buildSlide(pkg: OpcPackage, slidePart: string, index: number): S
     master: makeScope(pkg, masterPart ?? slidePart, colorCtx),
   };
 
+  const parts: PartResolver = {
+    relTargetsByType: (type) => pkg.relsByType(slidePart, type).map((r) => r.target),
+    partForRel: (relId) => pkg.resolveRel(slidePart, relId)?.target,
+    xml: (part) => pkg.getXml(part),
+    scopeFor: (part) => makeScope(pkg, part, colorCtx),
+  };
+
   const ctx: SlideBuildCtx = {
     colorCtx,
     theme,
     layoutPhs: indexPlaceholders(spTreeOf(layoutXml)),
     masterPhs: indexPlaceholders(spTreeOf(masterXml)),
     scopes,
+    parts,
   };
   const masterTxStyles = child(masterXml, 'txStyles');
   if (masterTxStyles) ctx.masterTxStyles = masterTxStyles;

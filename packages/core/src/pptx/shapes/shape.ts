@@ -36,8 +36,9 @@ import { placeholderOf, matchPlaceholder } from './placeholders.js';
 import { buildPic } from '../pictures/picture.js';
 import { parseTable } from '../tables/table.js';
 import { parseTextBody } from '../text/text.js';
+import { resolveDiagramDrawing } from '../diagrams/diagram.js';
 
-export type { SlideBuildCtx, SlideScopes, BuildOpts } from './props.js';
+export type { SlideBuildCtx, SlideScopes, BuildOpts, PartResolver } from './props.js';
 
 const TABLE_URI = 'http://schemas.openxmlformats.org/drawingml/2006/table';
 const CHART_URI = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
@@ -217,6 +218,12 @@ function buildFrame(frame: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): Fram
   if (frameType === 'table') {
     const tbl = child(graphicData, 'tbl');
     if (tbl) shape.table = parseTable(tbl, ctx.colorCtx, scope);
+  } else if (frameType === 'diagram') {
+    const dg = resolveDiagramDrawing(graphicData, ctx);
+    if (dg) {
+      const shapes = buildShapes(dg.spTree, ctx, dg.scope);
+      if (shapes.length) shape.diagram = shapes;
+    }
   }
   return shape;
 }

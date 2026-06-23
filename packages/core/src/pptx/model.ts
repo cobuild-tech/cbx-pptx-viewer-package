@@ -38,6 +38,15 @@ export type Fill =
       crop?: { l: number; t: number; r: number; b: number };
     };
 
+/** Arrowhead/marker on a line end (`<a:headEnd>` / `<a:tailEnd>`). */
+export type LineEndType = 'triangle' | 'arrow' | 'stealth' | 'diamond' | 'oval';
+export interface LineEnd {
+  type: LineEndType;
+  /** Marker width/length category across/along the line. */
+  w: 'sm' | 'med' | 'lg';
+  len: 'sm' | 'med' | 'lg';
+}
+
 export interface Stroke {
   color: Color;
   /** Width in px. */
@@ -45,6 +54,10 @@ export interface Stroke {
   /** Dash pattern in px (CSS stroke-dasharray), if dashed. */
   dash?: number[];
   cap?: 'butt' | 'round' | 'square';
+  /** Arrowhead at the start of the line, if any. */
+  headEnd?: LineEnd;
+  /** Arrowhead at the end of the line, if any. */
+  tailEnd?: LineEnd;
 }
 
 /**
@@ -186,6 +199,8 @@ export interface FrameShape extends ShapeBase {
   kind: 'frame';
   frameType: 'table' | 'chart' | 'diagram' | 'unknown';
   table?: Table;
+  /** SmartArt: the diagram's pre-laid-out shapes, positioned in the frame box. */
+  diagram?: Shape[];
 }
 
 export type Shape =

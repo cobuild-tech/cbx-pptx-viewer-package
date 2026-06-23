@@ -48,6 +48,10 @@ const GENERATORS: Record<string, (w: number, h: number, adj: Adjust) => string> 
   ellipse: ellipse,
   flowChartConnector: ellipse,
   roundRect: roundRect,
+  // One/two-corner rounded variants: approximate by rounding all corners.
+  round1Rect: roundRect,
+  round2SameRect: roundRect,
+  round2DiagRect: roundRect,
   triangle: (w, h) =>
     poly([
       [w / 2, 0],
@@ -116,9 +120,59 @@ const GENERATORS: Record<string, (w: number, h: number, adj: Adjust) => string> 
       [w, h - bodyTop],
     ]);
   },
+  // Pentagon/arrow callout (a rectangle with a pointed right edge).
+  homePlate: (w, h, adj) => {
+    const dx = Math.min(w, h) * (adj['adj'] ?? 0.5);
+    const x1 = Math.max(0, w - dx);
+    return poly([
+      [0, 0],
+      [x1, 0],
+      [w, h / 2],
+      [x1, h],
+      [0, h],
+    ]);
+  },
+  chevron: (w, h, adj) => {
+    const dx = Math.min(w, h) * (adj['adj'] ?? 0.5);
+    return poly([
+      [0, 0],
+      [w - dx, 0],
+      [w, h / 2],
+      [w - dx, h],
+      [0, h],
+      [dx, h / 2],
+    ]);
+  },
+  // Open elliptical arc (a stroked curve, not a filled region). adj1/adj2 are
+  // the start/end angles in 60000ths of a degree (clockwise from 3 o'clock).
+  arc: (w, h, adj) => {
+    const rx = w / 2;
+    const ry = h / 2;
+    const a1 = adjDeg(adj['adj1'], 270);
+    const a2 = adjDeg(adj['adj2'], 0);
+    const r1 = (a1 * Math.PI) / 180;
+    const r2 = (a2 * Math.PI) / 180;
+    const x1 = rx + rx * Math.cos(r1);
+    const y1 = ry + ry * Math.sin(r1);
+    const x2 = rx + rx * Math.cos(r2);
+    const y2 = ry + ry * Math.sin(r2);
+    const sweep = (((a2 - a1) % 360) + 360) % 360; // clockwise degrees swept
+    const largeArc = sweep > 180 ? 1 : 0;
+    return `M${x1},${y1} A${rx},${ry} 0 ${largeArc} 1 ${x2},${y2}`;
+  },
   line: (w, h) => `M0,0 L${w},${h}`,
   straightConnector1: (w, h) => `M0,0 L${w},${h}`,
 };
+
+/**
+ * Convert an angle-typed adjustment to degrees. Adjust values arrive already
+ * divided by 100000 (the percentage convention), but angle guides are authored
+ * in 60000ths of a degree, so undo that scaling: deg = adj * 100000 / 60000.
+ */
+function adjDeg(adj: number | undefined, defaultDeg: number): number {
+  if (adj === undefined) return defaultDeg;
+  return (adj * 100000) / 60000;
+}
 
 function regularPolygon(w: number, h: number, n: number, startDeg: number): string {
   const cx = w / 2;
@@ -134,7 +188,7 @@ function regularPolygon(w: number, h: number, n: number, startDeg: number): stri
 }
 
 /** Preset names we render as just an outline stroke (no closed fill area). */
-export const OPEN_PRESETS = new Set(['line', 'straightConnector1']);
+export const OPEN_PRESETS = new Set(['line', 'straightConnector1', 'arc']);
 
 /** True if we have an exact generator for this preset. */
 export function hasPreset(preset: string): boolean {

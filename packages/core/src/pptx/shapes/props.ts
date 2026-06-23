@@ -25,6 +25,22 @@ export interface SlideScopes {
   master: ParseScope;
 }
 
+/**
+ * Narrow package access for features that must follow relationships into other
+ * parts (diagrams -> drawing, charts -> chart part) and resolve those parts'
+ * own media. Keeps the OPC package out of the feature slices.
+ */
+export interface PartResolver {
+  /** Targets of all relationships of a given type declared by the slide part. */
+  relTargetsByType(type: string): string[];
+  /** Resolve an `r:id` declared by the slide part to a part path. */
+  partForRel(relId: string): string | undefined;
+  /** Parsed XML root of a part, or undefined if absent/empty. */
+  xml(part: string): XmlNode | undefined;
+  /** A {@link ParseScope} rooted at `part`, for resolving its own rels/media. */
+  scopeFor(part: string): ParseScope;
+}
+
 export interface SlideBuildCtx {
   colorCtx: ColorContext;
   theme: Theme;
@@ -33,6 +49,8 @@ export interface SlideBuildCtx {
   /** The `<p:txStyles>` element of the slide master, if present. */
   masterTxStyles?: XmlNode;
   scopes: SlideScopes;
+  /** Access to other package parts referenced by this slide's frames. */
+  parts: PartResolver;
 }
 
 export interface BuildOpts {

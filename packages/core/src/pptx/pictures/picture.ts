@@ -6,9 +6,10 @@
  * ones), and captures any source-rectangle crop. A non-rectangular preset on
  * the picture clips the image (e.g. a photo cropped into a circle).
  */
-import { child, attr, attrNum, type XmlNode } from '../../oxml/xml.js';
+import { child, attrNum, type XmlNode } from '../../oxml/xml.js';
 import type { PictureShape } from '../model.js';
 import type { ParseScope } from '../scope.js';
+import { blipEmbed } from '../shapes/fill.js';
 import {
   type SlideBuildCtx,
   resolveTransform,
@@ -22,7 +23,7 @@ export function buildPic(pic: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): P
   const spPr = child(pic, 'spPr');
   const blipFill = child(pic, 'blipFill');
   const blip = child(blipFill, 'blip');
-  const rId = attr(blip, 'embed') ?? attr(blip, 'link');
+  const rId = blipEmbed(blip);
   const part = rId ? scope.resolveImage(rId) : undefined;
   if (!part) return null;
 
