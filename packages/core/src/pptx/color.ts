@@ -14,6 +14,11 @@ export interface Theme {
   colors: Record<string, string>;
   majorFont: string;
   minorFont: string;
+  /**
+   * `<a:effectStyleLst>` effect styles from the format scheme, in order. A
+   * shape's `effectRef idx="N"` selects effectStyles[N-1] (idx 0 = none).
+   */
+  effectStyles: XmlNode[];
 }
 
 export interface ColorContext {
@@ -74,6 +79,7 @@ export function parseTheme(themeXml: XmlNode | undefined): Theme {
     },
     majorFont: 'Calibri Light',
     minorFont: 'Calibri',
+    effectStyles: [],
   };
   if (!themeXml) return fallback;
 
@@ -93,6 +99,13 @@ export function parseTheme(themeXml: XmlNode | undefined): Theme {
   const minor = attr(child(child(fontScheme, 'minorFont'), 'latin'), 'typeface');
   if (major) fallback.majorFont = major;
   if (minor) fallback.minorFont = minor;
+
+  const effectStyleLst = child(child(elements, 'fmtScheme'), 'effectStyleLst');
+  if (effectStyleLst) {
+    fallback.effectStyles = effectStyleLst.children.filter(
+      (c) => localName(c.name) === 'effectStyle',
+    );
+  }
 
   return fallback;
 }

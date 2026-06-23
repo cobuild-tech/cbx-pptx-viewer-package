@@ -13,11 +13,14 @@ import type {
   GroupShape,
   Fill,
   Stroke,
+  LineEnd,
+  LineEndType,
 } from '../model.js';
 import { colorToCss } from '../color.js';
 import { presetPath, OPEN_PRESETS } from './geometry/presets.js';
 import { SVG_NS, positioned, applyFillBackground, type RenderDeps } from '../render/primitives.js';
 import { renderTextBody } from '../text/render.js';
+import { applyEffects } from '../effects/render.js';
 import { renderShape } from '../render/dom.js';
 
 export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement {
@@ -45,6 +48,7 @@ export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement 
   }
 
   if (shape.text) el.appendChild(renderTextBody(shape.text, deps));
+  applyEffects(el, shape.effects);
   return el;
 }
 
@@ -52,6 +56,7 @@ export function renderConnector(shape: ConnectorShape, deps: RenderDeps): HTMLEl
   const el = positioned(shape.transform);
   const w = shape.transform?.w ?? 0;
   const h = shape.transform?.h ?? 0;
+  applyEffects(el, shape.effects);
   if (!shape.stroke) return el;
   if (shape.geom.type === 'preset') {
     // Preset connector geometry is already in the shape's box (px) space.
@@ -112,9 +117,62 @@ function strokeOverlay(
     path.setAttribute('stroke-width', `${stroke.width}`);
     if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash.join(','));
     if (stroke.cap) path.setAttribute('stroke-linecap', stroke.cap);
+    applyLineEnds(svg, path, stroke);
   }
   svg.appendChild(path);
   return svg;
+}
+
+const MARKER_SIZE: Record<'sm' | 'med' | 'lg', number> = { sm: 3, med: 4.5, lg: 6 };
+
+/** Arrowhead path in a 0..10 box, tip at (10,5) pointing along +x. */
+function markerShape(type: LineEndType): string {
+  switch (type) {
+    case 'oval':
+      return 'M0,5 a5,5 0 1,0 10,0 a5,5 0 1,0 -10,0 Z';
+    case 'diamond':
+      return 'M5,0 L10,5 L5,10 L0,5 Z';
+    default: // triangle / arrow / stealth -> filled triangle
+      return 'M0,0 L10,5 L0,10 Z';
+  }
+}
+
+/** Attach SVG arrowhead markers for a stroke's head/tail ends, if any. */
+function applyLineEnds(svg: SVGSVGElement, path: SVGPathElement, stroke: Stroke): void {
+  if (!stroke.headEnd && !stroke.tailEnd) return;
+  let defs = svg.querySelector('defs');
+  if (!defs) {
+    defs = document.createElementNS(SVG_NS, 'defs');
+    svg.insertBefore(defs, svg.firstChild);
+  }
+  const color = colorToCss(stroke.color);
+  if (stroke.headEnd) {
+    const id = `le-${Math.random().toString(36).slice(2, 9)}`;
+    defs.appendChild(makeMarker(id, stroke.headEnd, color));
+    path.setAttribute('marker-start', `url(#${id})`);
+  }
+  if (stroke.tailEnd) {
+    const id = `le-${Math.random().toString(36).slice(2, 9)}`;
+    defs.appendChild(makeMarker(id, stroke.tailEnd, color));
+    path.setAttribute('marker-end', `url(#${id})`);
+  }
+}
+
+function makeMarker(id: string, end: LineEnd, color: string): SVGMarkerElement {
+  const m = document.createElementNS(SVG_NS, 'marker');
+  m.setAttribute('id', id);
+  m.setAttribute('viewBox', '0 0 10 10');
+  m.setAttribute('refX', '10'); // tip sits at the line's endpoint
+  m.setAttribute('refY', '5');
+  m.setAttribute('markerUnits', 'strokeWidth');
+  m.setAttribute('markerWidth', `${MARKER_SIZE[end.len]}`);
+  m.setAttribute('markerHeight', `${MARKER_SIZE[end.w]}`);
+  m.setAttribute('orient', 'auto-start-reverse');
+  const p = document.createElementNS(SVG_NS, 'path');
+  p.setAttribute('d', markerShape(end.type));
+  p.setAttribute('fill', color);
+  m.appendChild(p);
+  return m;
 }
 
 function setupSvgFill(svg: SVGSVGElement, fill: Fill | undefined, deps: RenderDeps): string {
@@ -214,6 +272,7 @@ function customGeomSvg(
     path.setAttribute('stroke-width', `${stroke.width}`);
     path.setAttribute('vector-effect', 'non-scaling-stroke');
     if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash.join(','));
+    applyLineEnds(svg, path, stroke);
   }
   svg.appendChild(path);
   return svg;

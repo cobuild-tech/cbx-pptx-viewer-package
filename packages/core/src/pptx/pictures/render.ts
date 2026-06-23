@@ -9,6 +9,7 @@ import type { PictureShape } from '../model.js';
 import { colorToCss } from '../color.js';
 import { positioned, type RenderDeps } from '../render/primitives.js';
 import { presetPath } from '../shapes/geometry/presets.js';
+import { applyEffects } from '../effects/render.js';
 
 export function renderPicture(shape: PictureShape, deps: RenderDeps): HTMLElement | null {
   const url = deps.imageUrl(shape.part);
@@ -48,5 +49,6 @@ export function renderPicture(shape: PictureShape, deps: RenderDeps): HTMLElemen
     el.style.outline = `${shape.stroke.width}px solid ${colorToCss(shape.stroke.color)}`;
     el.style.outlineOffset = `-${shape.stroke.width}px`;
   }
+  applyEffects(el, shape.effects);
   return el;
 }

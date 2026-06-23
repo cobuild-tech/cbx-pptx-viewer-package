@@ -38,6 +38,15 @@ export type Fill =
       crop?: { l: number; t: number; r: number; b: number };
     };
 
+/** Arrowhead/marker on a line end (`<a:headEnd>` / `<a:tailEnd>`). */
+export type LineEndType = 'triangle' | 'arrow' | 'stealth' | 'diamond' | 'oval';
+export interface LineEnd {
+  type: LineEndType;
+  /** Marker width/length category across/along the line. */
+  w: 'sm' | 'med' | 'lg';
+  len: 'sm' | 'med' | 'lg';
+}
+
 export interface Stroke {
   color: Color;
   /** Width in px. */
@@ -45,7 +54,22 @@ export interface Stroke {
   /** Dash pattern in px (CSS stroke-dasharray), if dashed. */
   dash?: number[];
   cap?: 'butt' | 'round' | 'square';
+  /** Arrowhead at the start of the line, if any. */
+  headEnd?: LineEnd;
+  /** Arrowhead at the end of the line, if any. */
+  tailEnd?: LineEnd;
 }
+
+/**
+ * A visual effect from `<a:effectLst>` (or a theme `effectRef`). Offsets/radii
+ * are in px; the renderer maps these to CSS filters / box-reflect.
+ */
+export type Effect =
+  | { type: 'outerShadow'; dx: number; dy: number; blur: number; color: Color }
+  | { type: 'innerShadow'; dx: number; dy: number; blur: number; color: Color }
+  | { type: 'glow'; radius: number; color: Color }
+  | { type: 'softEdge'; radius: number }
+  | { type: 'reflection'; blur: number; dist: number; startAlpha: number; endAlpha: number };
 
 export type TextAlign = 'l' | 'ctr' | 'r' | 'just';
 export type VerticalAnchor = 'top' | 'ctr' | 'bottom';
@@ -132,6 +156,8 @@ interface ShapeBase {
   id?: string;
   name?: string;
   transform?: Transform;
+  /** Visual effects (shadow/glow/reflection/soft edge), in document order. */
+  effects?: Effect[];
 }
 
 export interface PresetShape extends ShapeBase {
@@ -173,6 +199,8 @@ export interface FrameShape extends ShapeBase {
   kind: 'frame';
   frameType: 'table' | 'chart' | 'diagram' | 'unknown';
   table?: Table;
+  /** SmartArt: the diagram's pre-laid-out shapes, positioned in the frame box. */
+  diagram?: Shape[];
 }
 
 export type Shape =

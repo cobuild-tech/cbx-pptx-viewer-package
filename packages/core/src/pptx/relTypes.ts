@@ -1,5 +1,6 @@
 /** Well-known OPC relationship type URIs used in PresentationML packages. */
 const OFFICE = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const MS_2007 = 'http://schemas.microsoft.com/office/2007/relationships';
 
 export const RelType = {
   OfficeDocument: `${OFFICE}/officeDocument`,
@@ -13,6 +14,8 @@ export const RelType = {
   Chart: `${OFFICE}/chart`,
   Hyperlink: `${OFFICE}/hyperlink`,
   Diagram: `${OFFICE}/diagramData`,
+  /** The pre-laid-out SmartArt drawing (Microsoft extension). */
+  DiagramDrawing: `${MS_2007}/diagramDrawing`,
   Font: `${OFFICE}/font`,
 } as const;
 

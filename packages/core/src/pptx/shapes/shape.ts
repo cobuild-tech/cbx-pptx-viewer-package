@@ -27,6 +27,7 @@ import {
   resolveTransform,
   resolveGeometry,
   resolveStroke,
+  resolveEffects,
   styleRefColor,
   buildTextChain,
 } from './props.js';
@@ -35,8 +36,9 @@ import { placeholderOf, matchPlaceholder } from './placeholders.js';
 import { buildPic } from '../pictures/picture.js';
 import { parseTable } from '../tables/table.js';
 import { parseTextBody } from '../text/text.js';
+import { resolveDiagramDrawing } from '../diagrams/diagram.js';
 
-export type { SlideBuildCtx, SlideScopes, BuildOpts } from './props.js';
+export type { SlideBuildCtx, SlideScopes, BuildOpts, PartResolver } from './props.js';
 
 const TABLE_URI = 'http://schemas.openxmlformats.org/drawingml/2006/table';
 const CHART_URI = 'http://schemas.openxmlformats.org/drawingml/2006/chart';
@@ -140,6 +142,7 @@ function buildSp(
 
   // Resolve stroke with inheritance.
   const stroke = resolveStroke(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
+  const effects = resolveEffects(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
 
   const shape: PresetShape = {
     kind: 'shape',
@@ -148,6 +151,7 @@ function buildSp(
   };
   if (transform) shape.transform = transform;
   if (stroke) shape.stroke = stroke;
+  if (effects.length) shape.effects = effects;
   if (ph) shape.placeholder = ph;
 
   const txBody = child(sp, 'txBody');
@@ -214,6 +218,12 @@ function buildFrame(frame: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): Fram
   if (frameType === 'table') {
     const tbl = child(graphicData, 'tbl');
     if (tbl) shape.table = parseTable(tbl, ctx.colorCtx, scope);
+  } else if (frameType === 'diagram') {
+    const dg = resolveDiagramDrawing(graphicData, ctx);
+    if (dg) {
+      const shapes = buildShapes(dg.spTree, ctx, dg.scope);
+      if (shapes.length) shape.diagram = shapes;
+    }
   }
   return shape;
 }

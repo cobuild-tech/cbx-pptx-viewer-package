@@ -5,7 +5,7 @@
  */
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { emuToPx } from '../../oxml/units.js';
-import type { Fill, Stroke, GradientStop } from '../model.js';
+import type { Fill, Stroke, GradientStop, LineEnd, LineEndType } from '../model.js';
 import { resolveContainerColor, resolveColorEl, findColorEl } from '../color.js';
 import type { ParseScope } from '../scope.js';
 
@@ -70,9 +70,25 @@ function parseGradient(el: XmlNode, ctx: ParseScope['colorCtx']): Fill {
   return { type: 'gradient', stops, radial: true };
 }
 
+/**
+ * Resolve a `<a:blip>` to its media relationship id. Modern Office stores
+ * vector images with no primary raster embed — only an `<asvg:svgBlip>`
+ * alternative in the blip's extLst — so fall back to that (browsers render SVG).
+ */
+export function blipEmbed(blip: XmlNode | undefined): string | undefined {
+  const direct = attr(blip, 'embed') ?? attr(blip, 'link');
+  if (direct) return direct;
+  for (const ext of children(child(blip, 'extLst'), 'ext')) {
+    const svg = child(ext, 'svgBlip');
+    const rId = svg ? attr(svg, 'embed') ?? attr(svg, 'link') : undefined;
+    if (rId) return rId;
+  }
+  return undefined;
+}
+
 function parseBlip(el: XmlNode, scope: ParseScope): Fill {
   const blip = child(el, 'blip');
-  const rId = attr(blip, 'embed') ?? attr(blip, 'link');
+  const rId = blipEmbed(blip);
   const part = rId ? scope.resolveImage(rId) : undefined;
   if (!part) return { type: 'none' };
 
@@ -127,5 +143,21 @@ export function strokeFromLn(ln: XmlNode | undefined, scope: ParseScope): Stroke
   else if (cap === 'sq') stroke.cap = 'square';
   else if (cap === 'flat') stroke.cap = 'butt';
 
+  const headEnd = lineEnd(child(ln, 'headEnd'));
+  if (headEnd) stroke.headEnd = headEnd;
+  const tailEnd = lineEnd(child(ln, 'tailEnd'));
+  if (tailEnd) stroke.tailEnd = tailEnd;
+
   return stroke;
+}
+
+const LINE_END_TYPES = new Set(['triangle', 'arrow', 'stealth', 'diamond', 'oval']);
+
+/** Parse an `<a:headEnd>`/`<a:tailEnd>` arrowhead descriptor, if present. */
+function lineEnd(el: XmlNode | undefined): LineEnd | undefined {
+  const type = attr(el, 'type');
+  if (!type || !LINE_END_TYPES.has(type)) return undefined;
+  const size = (v: string | undefined): 'sm' | 'med' | 'lg' =>
+    v === 'sm' || v === 'lg' ? v : 'med';
+  return { type: type as LineEndType, w: size(attr(el, 'w')), len: size(attr(el, 'len')) };
 }

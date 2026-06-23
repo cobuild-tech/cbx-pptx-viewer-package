@@ -10,9 +10,10 @@
  */
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { emuToPx, angleToDeg } from '../../oxml/units.js';
-import type { Transform, Geometry, Fill, Stroke } from '../model.js';
+import type { Transform, Geometry, Fill, Stroke, Effect } from '../model.js';
 import { type ColorContext, type Theme, resolveColorEl, findColorEl } from '../color.js';
 import { strokeFromLn } from './fill.js';
+import { parseEffectLst } from '../effects/effects.js';
 import { parseCustomGeometry } from './geometry/custom.js';
 import { TextStyleChain } from '../text/textStyles.js';
 import { type PhInfo, masterStyleKey, lstStyleOf } from './placeholders.js';
@@ -24,6 +25,22 @@ export interface SlideScopes {
   master: ParseScope;
 }
 
+/**
+ * Narrow package access for features that must follow relationships into other
+ * parts (diagrams -> drawing, charts -> chart part) and resolve those parts'
+ * own media. Keeps the OPC package out of the feature slices.
+ */
+export interface PartResolver {
+  /** Targets of all relationships of a given type declared by the slide part. */
+  relTargetsByType(type: string): string[];
+  /** Resolve an `r:id` declared by the slide part to a part path. */
+  partForRel(relId: string): string | undefined;
+  /** Parsed XML root of a part, or undefined if absent/empty. */
+  xml(part: string): XmlNode | undefined;
+  /** A {@link ParseScope} rooted at `part`, for resolving its own rels/media. */
+  scopeFor(part: string): ParseScope;
+}
+
 export interface SlideBuildCtx {
   colorCtx: ColorContext;
   theme: Theme;
@@ -32,6 +49,8 @@ export interface SlideBuildCtx {
   /** The `<p:txStyles>` element of the slide master, if present. */
   masterTxStyles?: XmlNode;
   scopes: SlideScopes;
+  /** Access to other package parts referenced by this slide's frames. */
+  parts: PartResolver;
 }
 
 export interface BuildOpts {
@@ -179,6 +198,35 @@ export function styleStroke(lnRef: XmlNode | undefined, ctx: SlideBuildCtx): Str
   if (!lnRef || attr(lnRef, 'idx') === '0') return undefined;
   const color = resolveColorEl(findColorEl(lnRef), ctx.colorCtx);
   return color ? { color, width: 1 } : undefined;
+}
+
+/**
+ * Resolve a shape's effects: an inline `<a:effectLst>` (slide -> layout ->
+ * master) wins; otherwise a `<a:effectRef idx>` selects a theme effect style,
+ * with the effectRef's own color supplied as `phClr` for that style's colors.
+ */
+export function resolveEffects(
+  spPr: XmlNode | undefined,
+  style: XmlNode | undefined,
+  layoutSpPr: XmlNode | undefined,
+  layoutStyle: XmlNode | undefined,
+  masterSpPr: XmlNode | undefined,
+  masterStyle: XmlNode | undefined,
+  ctx: SlideBuildCtx,
+): Effect[] {
+  const inline = child(spPr, 'effectLst') ?? child(layoutSpPr, 'effectLst') ?? child(masterSpPr, 'effectLst');
+  if (inline) return parseEffectLst(inline, ctx.colorCtx);
+
+  const effectRef = child(style, 'effectRef') ?? child(layoutStyle, 'effectRef') ?? child(masterStyle, 'effectRef');
+  const idx = attrNum(effectRef, 'idx');
+  if (!effectRef || !idx) return [];
+  const effectStyle = ctx.theme.effectStyles[idx - 1];
+  const styleEffectLst = child(effectStyle, 'effectLst');
+  if (!styleEffectLst) return [];
+
+  const phClr = resolveColorEl(findColorEl(effectRef), ctx.colorCtx);
+  const colorCtx = phClr ? { ...ctx.colorCtx, phClr } : ctx.colorCtx;
+  return parseEffectLst(styleEffectLst, colorCtx);
 }
 
 /** Assemble the text-style inheritance chain (most-specific first) for a shape. */

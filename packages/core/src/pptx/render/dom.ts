@@ -51,8 +51,15 @@ function renderFrame(shape: FrameShape, deps: RenderDeps): HTMLElement {
   const el = positioned(shape.transform);
   if (shape.frameType === 'table' && shape.table) {
     el.appendChild(renderTable(shape.table, deps));
+  } else if (shape.frameType === 'diagram' && shape.diagram?.length) {
+    // SmartArt: the pre-laid-out shapes are positioned in the frame's own
+    // coordinate space, so they drop straight into the (positioned) frame box.
+    for (const s of shape.diagram) {
+      const child = renderShape(s, deps);
+      if (child) el.appendChild(child);
+    }
   } else {
-    // Charts / diagrams / unknown: a labeled placeholder so it isn't invisible.
+    // Charts / unresolved diagrams / unknown: a labeled placeholder so it isn't invisible.
     el.style.display = 'flex';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';
