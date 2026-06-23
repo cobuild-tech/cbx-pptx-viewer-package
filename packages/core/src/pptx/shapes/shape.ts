@@ -37,6 +37,7 @@ import { buildPic } from '../pictures/picture.js';
 import { parseTable } from '../tables/table.js';
 import { parseTextBody } from '../text/text.js';
 import { resolveDiagramDrawing } from '../diagrams/diagram.js';
+import { buildDiagramFallback } from '../diagrams/fallback.js';
 import { parseChart } from '../charts/chart.js';
 
 export type { SlideBuildCtx, SlideScopes, BuildOpts, PartResolver } from './props.js';
@@ -159,6 +160,9 @@ function buildSp(
   if (txBody && children(txBody, 'p').length > 0) {
     const chain = buildTextChain(sp, ph, layoutPh, masterPh, ctx);
     shape.text = parseTextBody(txBody, chain, ctx.colorCtx, scope);
+    // SmartArt drawings give each label its own text rectangle via <dsp:txXfrm>.
+    const textBox = parseXfrmEl(child(sp, 'txXfrm'));
+    if (textBox) shape.textBox = textBox;
   }
   return shape;
 }
@@ -220,11 +224,14 @@ function buildFrame(frame: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): Fram
     const tbl = child(graphicData, 'tbl');
     if (tbl) shape.table = parseTable(tbl, ctx.colorCtx, scope);
   } else if (frameType === 'diagram') {
+    // Prefer PowerPoint's cached pre-laid-out drawing; if it's absent (or empty),
+    // fall back to laying out the data model ourselves.
     const dg = resolveDiagramDrawing(graphicData, ctx);
-    if (dg) {
-      const shapes = buildShapes(dg.spTree, ctx, dg.scope);
-      if (shapes.length) shape.diagram = shapes;
+    let shapes = dg ? buildShapes(dg.spTree, ctx, dg.scope) : [];
+    if (!shapes.length && transform) {
+      shapes = buildDiagramFallback(graphicData, ctx, transform.w, transform.h) ?? [];
     }
+    if (shapes.length) shape.diagram = shapes;
   } else if (frameType === 'chart') {
     const rid = attr(child(graphicData, 'chart'), 'r:id');
     const part = rid ? ctx.parts.partForRel(rid) : undefined;

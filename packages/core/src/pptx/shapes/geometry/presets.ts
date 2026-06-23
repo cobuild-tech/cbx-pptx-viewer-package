@@ -140,6 +140,56 @@ function cross(w: number, h: number, t: number): string {
   ]);
 }
 
+/**
+ * Curved (circular) arrow: a ring-band sweeping from a start angle to an end
+ * angle with a triangular arrowhead at the leading end. adj1 sets band
+ * thickness; adj3/adj4 set the start/end angles (60000ths of a degree, already
+ * scaled by parseAdjust). Defaults produce a ~245° clockwise arrow. `flip`
+ * reverses the head to the other end (leftCircularArrow).
+ */
+function circularArrow(w: number, h: number, adj: Adjust, flip: boolean): string {
+  const cx = w / 2;
+  const cy = h / 2;
+  const ss = Math.min(w, h);
+  const ro = ss / 2;
+  // Body thickness from adj1 (fraction of the short side); adj5 sets the larger
+  // arrowhead half-thickness.
+  const band = ss * Math.max(0.04, Math.min(0.35, adj['adj1'] ?? 0.12));
+  const headHalf = ss * Math.max(band / ss, Math.min(0.25, adj['adj5'] ?? 0.08)) || band * 1.6;
+  const ri = Math.max(ro * 0.1, ro - band);
+  const rmid = (ro + ri) / 2;
+  // The body sweeps from the tail (adj4) to the arrowhead (adj3); the gap to the
+  // next arrow is the difference to its tail. Going tail->head the short way
+  // gives one segment per arrow (vs. the long way, which overlaps into a ring).
+  let a0 = adjDeg(adj['adj4'], 180);
+  let a1 = adjDeg(adj['adj3'], 20);
+  if (flip) [a0, a1] = [a1, a0];
+  if (a1 <= a0) a1 += 360;
+  const headSpan = Math.min(28, (a1 - a0) * 0.3);
+  const aHead = a1 - headSpan;
+  const P = (r: number, deg: number): [number, number] => {
+    const rad = (deg * Math.PI) / 180;
+    return [cx + r * Math.cos(rad), cy + r * Math.sin(rad)];
+  };
+  const [ox0, oy0] = P(ro, a0);
+  const [obx, oby] = P(rmid + headHalf, aHead); // outer barb
+  const [tipx, tipy] = P(rmid, a1); // tip
+  const [ibx, iby] = P(rmid - headHalf, aHead); // inner barb
+  const [ihx, ihy] = P(ri, aHead);
+  const [ix0, iy0] = P(ri, a0);
+  return [
+    `M${ox0},${oy0}`,
+    arcCmd(cx, cy, ro, ro, a0, aHead), // outer arc
+    `L${obx},${oby}`, // outer barb
+    `L${tipx},${tipy}`, // tip
+    `L${ibx},${iby}`, // inner barb
+    `L${ihx},${ihy}`, // back onto inner ring
+    arcCmd(cx, cy, ri, ri, aHead, a0), // inner arc back
+    `L${ix0},${iy0}`,
+    'Z',
+  ].join(' ');
+}
+
 /** Diagonal "X" (multiply) as two crossed bands. */
 function xMark(w: number, h: number, t: number): string {
   return [
@@ -349,6 +399,9 @@ const GENERATORS: Record<string, (w: number, h: number, adj: Adjust) => string> 
       [w - hl, h], [w - hl, h / 2 + sh], [0, h / 2 + sh],
     ]);
   },
+
+  circularArrow: (w, h, adj) => circularArrow(w, h, adj, false),
+  leftCircularArrow: (w, h, adj) => circularArrow(w, h, adj, true),
 
   // --- Math symbols ---
   mathPlus: (w, h) => cross(w, h, 0.23),

@@ -166,6 +166,13 @@ export interface PresetShape extends ShapeBase {
   fill: Fill;
   stroke?: Stroke;
   text?: TextBody;
+  /**
+   * Explicit text rectangle in the same (absolute) coordinate space as
+   * {@link transform}, from a diagram drawing's `<dsp:txXfrm>`. When present the
+   * text is laid out in this sub-box instead of filling the shape — SmartArt
+   * uses it to place a label inside one wedge/segment of a larger shape.
+   */
+  textBox?: Transform;
   /** Placeholder type if this shape is a placeholder (title, body, etc.). */
   placeholder?: { type: string; idx?: number };
 }

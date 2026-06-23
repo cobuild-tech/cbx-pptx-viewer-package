@@ -53,7 +53,22 @@ export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement 
     }
   }
 
-  if (shape.text) el.appendChild(renderTextBody(shape.text, deps));
+  if (shape.text) {
+    if (shape.textBox && shape.transform) {
+      // Place the label in its own rectangle (SmartArt txXfrm) instead of
+      // filling the shape — the text body fills this wrapper minus its insets.
+      const wrap = document.createElement('div');
+      wrap.style.position = 'absolute';
+      wrap.style.left = `${shape.textBox.x - shape.transform.x}px`;
+      wrap.style.top = `${shape.textBox.y - shape.transform.y}px`;
+      wrap.style.width = `${shape.textBox.w}px`;
+      wrap.style.height = `${shape.textBox.h}px`;
+      wrap.appendChild(renderTextBody(shape.text, deps));
+      el.appendChild(wrap);
+    } else {
+      el.appendChild(renderTextBody(shape.text, deps));
+    }
+  }
   applyEffects(el, shape.effects);
   return el;
 }
