@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
-import { Deck } from '../src/parse/deck.js';
-import { RelType } from '../src/opc/relTypes.js';
-import type { PresetShape } from '../src/model.js';
+import { Deck } from '../src/pptx/deck/deck.js';
+import { RelType } from '../src/pptx/relTypes.js';
+import type { PresetShape } from '../src/pptx/model.js';
 
 /** A structurally complete (if minimal) single-slide deck for pipeline tests. */
 function buildDeck(): Uint8Array {

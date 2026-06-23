@@ -6,8 +6,8 @@
  * and then transformed by modifiers (lumMod/lumOff/shade/tint/alpha...). This
  * module turns any DrawingML color element into a concrete sRGB {@link Color}.
  */
-import { child, attr, attrNum, localName, type XmlNode } from '../xml.js';
-import type { Color } from '../model.js';
+import { child, attr, attrNum, localName, type XmlNode } from '../oxml/xml.js';
+import type { Color } from './model.js';
 
 export interface Theme {
   /** Theme color-scheme entries: dk1,lt1,dk2,lt2,accent1..6,hlink,folHlink -> hex. */

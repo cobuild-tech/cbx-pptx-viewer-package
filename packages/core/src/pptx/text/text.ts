@@ -5,12 +5,12 @@
  * order, resolving each run and paragraph through the shape's
  * {@link TextStyleChain} (which encodes the full inheritance chain).
  */
-import { child, children, attr, attrNum, localName, type XmlNode } from '../xml.js';
-import { emuToPx } from '../units.js';
+import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
+import { emuToPx } from '../../oxml/units.js';
 import type { Paragraph, TextBody, TextRun, VerticalAnchor } from '../model.js';
-import type { ColorContext } from '../resolve/color.js';
-import type { TextStyleChain } from '../resolve/textStyles.js';
-import type { ParseScope } from '../resolve/fill.js';
+import type { ColorContext } from '../color.js';
+import type { TextStyleChain } from './textStyles.js';
+import type { ParseScope } from '../scope.js';
 
 const DEFAULT_INSET = { l: emuToPx(91440), t: emuToPx(45720), r: emuToPx(91440), b: emuToPx(45720) };
 

@@ -5,7 +5,7 @@
  * placeholder on its layout, which inherits from the master. Matching is by
  * `idx` when present, otherwise by `type` (with title-like types grouped).
  */
-import { child, children, attr, attrNum, localName, type XmlNode } from '../xml.js';
+import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 
 export interface PhInfo {
   type: string;

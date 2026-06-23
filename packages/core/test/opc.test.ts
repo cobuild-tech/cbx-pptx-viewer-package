@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
-import { OpcPackage } from '../src/opc/package.js';
-import { RelType } from '../src/opc/relTypes.js';
+import { OpcPackage } from '../src/oxml/package.js';
+import { RelType } from '../src/pptx/relTypes.js';
 
 /**
  * Build a minimal but structurally-correct .pptx-shaped package in memory so the

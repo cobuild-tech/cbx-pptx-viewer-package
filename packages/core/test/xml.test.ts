@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseXml, child, children, path, attr, attrNum, attrBool } from '../src/xml.js';
+import { parseXml, child, children, path, attr, attrNum, attrBool } from '../src/oxml/xml.js';
 
 describe('xml normalization', () => {
   const xml = parseXml(`

@@ -6,14 +6,14 @@
  *   ->  inherited placeholder list style  ->  master txStyles  ->  theme defaults.
  *
  * The resolver assembles the ordered chain of `<a:lstStyle>`-like nodes for a
- * shape (see resolve/shape.ts) and hands it here. This class answers
+ * shape (see shapes/props.ts) and hands it here. This class answers
  * "what are the effective run/paragraph properties at level N?".
  */
-import { child, attr, attrNum, attrBool, type XmlNode } from '../xml.js';
-import { emuToPx } from '../units.js';
+import { child, attr, attrNum, attrBool, type XmlNode } from '../../oxml/xml.js';
+import { emuToPx } from '../../oxml/units.js';
 import type { Bullet, Color, TextAlign } from '../model.js';
-import { resolveContainerColor, type ColorContext } from './color.js';
-import type { Theme } from './color.js';
+import { resolveContainerColor, type ColorContext } from '../color.js';
+import type { Theme } from '../color.js';
 
 export interface ResolvedRunProps {
   bold?: boolean;
