@@ -19,7 +19,7 @@ export interface Theme {
    * shape's `effectRef idx="N"` selects effectStyles[N-1] (idx 0 = none).
    */
   effectStyles: XmlNode[];
-}
+} 
 
 export interface ColorContext {
   theme: Theme;

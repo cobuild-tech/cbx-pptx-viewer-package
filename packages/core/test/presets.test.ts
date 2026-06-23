@@ -18,10 +18,19 @@ describe('preset geometry', () => {
     expect(d.endsWith('Z')).toBe(true);
   });
 
-  it('maps rounded-rect variants to a generator (not the rect fallback)', () => {
+  it('rounds only the top-right corner for round1Rect', () => {
     expect(hasPreset('round1Rect')).toBe(true);
-    expect(hasPreset('round2SameRect')).toBe(true);
-    // a rounded rect uses arcs (Q), a plain rect does not
-    expect(presetPath('round1Rect', 100, 100, {})).toContain('Q');
+    // exactly one arc (the single rounded corner)
+    const d = presetPath('round1Rect', 200, 100, { adj: 0.2 });
+    expect(d.match(/Q/g)?.length).toBe(1);
+  });
+
+  it('renders round2SameRect with adj=0 as a plain (square) rectangle', () => {
+    const d = presetPath('round2SameRect', 200, 100, { adj1: 0, adj2: 0 });
+    expect(d).not.toContain('Q'); // no rounded corners at all
+  });
+
+  it('rounds all four corners for roundRect', () => {
+    expect(presetPath('roundRect', 100, 100, { adj: 0.2 }).match(/Q/g)?.length).toBe(4);
   });
 });

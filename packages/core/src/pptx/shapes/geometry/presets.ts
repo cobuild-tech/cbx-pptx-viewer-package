@@ -19,21 +19,55 @@ function ellipse(w: number, h: number): string {
   return `M0,${ry} A${rx},${ry} 0 1 0 ${w},${ry} A${rx},${ry} 0 1 0 0,${ry} Z`;
 }
 
-function roundRect(w: number, h: number, adj: Adjust): string {
-  const a = adj['adj'] ?? adj['adj1'] ?? 0.16667;
-  const r = Math.min(w, h) * Math.min(0.5, a);
+/** Rounded rectangle with independent per-corner radii (px), rounded with arcs. */
+function cornerRect(w: number, h: number, tl: number, tr: number, br: number, bl: number): string {
+  const cap = Math.min(w, h) / 2;
+  const c = (v: number) => Math.max(0, Math.min(v, cap));
+  tl = c(tl); tr = c(tr); br = c(br); bl = c(bl);
   return [
-    `M${r},0`,
-    `L${w - r},0`,
-    `Q${w},0 ${w},${r}`,
-    `L${w},${h - r}`,
-    `Q${w},${h} ${w - r},${h}`,
-    `L${r},${h}`,
-    `Q0,${h} 0,${h - r}`,
-    `L0,${r}`,
-    `Q0,0 ${r},0`,
+    `M${tl},0`,
+    `L${w - tr},0`,
+    tr ? `Q${w},0 ${w},${tr}` : '',
+    `L${w},${h - br}`,
+    br ? `Q${w},${h} ${w - br},${h}` : '',
+    `L${bl},${h}`,
+    bl ? `Q0,${h} 0,${h - bl}` : '',
+    `L0,${tl}`,
+    tl ? `Q0,0 ${tl},0` : '',
     'Z',
-  ].join(' ');
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** Rectangle with independent per-corner straight-cut (chamfered) corners. */
+function snipRect(w: number, h: number, tl: number, tr: number, br: number, bl: number): string {
+  const cap = Math.min(w, h) / 2;
+  const c = (v: number) => Math.max(0, Math.min(v, cap));
+  tl = c(tl); tr = c(tr); br = c(br); bl = c(bl);
+  return [
+    `M${tl},0`,
+    `L${w - tr},0`,
+    tr ? `L${w},${tr}` : '',
+    `L${w},${h - br}`,
+    br ? `L${w - br},${h}` : '',
+    `L${bl},${h}`,
+    bl ? `L0,${h - bl}` : '',
+    `L0,${tl}`,
+    'Z',
+  ]
+    .filter(Boolean)
+    .join(' ');
+}
+
+/** Corner radius in px from an adjust fraction of the short side (default 1/6). */
+function cornerRadius(w: number, h: number, adj: number | undefined, def = 0.16667): number {
+  return Math.min(w, h) * (adj ?? def);
+}
+
+function roundRect(w: number, h: number, adj: Adjust): string {
+  const r = cornerRadius(w, h, adj['adj'] ?? adj['adj1']);
+  return cornerRect(w, h, r, r, r, r);
 }
 
 function poly(points: Array<[number, number]>): string {
@@ -48,10 +82,30 @@ const GENERATORS: Record<string, (w: number, h: number, adj: Adjust) => string> 
   ellipse: ellipse,
   flowChartConnector: ellipse,
   roundRect: roundRect,
-  // One/two-corner rounded variants: approximate by rounding all corners.
-  round1Rect: roundRect,
-  round2SameRect: roundRect,
-  round2DiagRect: roundRect,
+  // round1Rect rounds only the top-right corner.
+  round1Rect: (w, h, adj) => {
+    const r = cornerRadius(w, h, adj['adj']);
+    return cornerRect(w, h, 0, r, 0, 0);
+  },
+  // round2SameRect rounds the two top corners by adj1, the two bottom by adj2.
+  round2SameRect: (w, h, adj) => {
+    const r1 = cornerRadius(w, h, adj['adj1']);
+    const r2 = cornerRadius(w, h, adj['adj2'], 0);
+    return cornerRect(w, h, r1, r1, r2, r2);
+  },
+  // round2DiagRect rounds one diagonal pair (TL+BR) by adj1, the other by adj2.
+  round2DiagRect: (w, h, adj) => {
+    const r1 = cornerRadius(w, h, adj['adj1']);
+    const r2 = cornerRadius(w, h, adj['adj2'], 0);
+    return cornerRect(w, h, r1, r2, r1, r2);
+  },
+  // snip*Rect: corners cut straight instead of rounded (top-right for snip1Rect).
+  snip1Rect: (w, h, adj) => snipRect(w, h, 0, cornerRadius(w, h, adj['adj']), 0, 0),
+  snip2SameRect: (w, h, adj) => {
+    const r1 = cornerRadius(w, h, adj['adj1']);
+    const r2 = cornerRadius(w, h, adj['adj2'], 0);
+    return snipRect(w, h, r1, r1, r2, r2);
+  },
   triangle: (w, h) =>
     poly([
       [w / 2, 0],
