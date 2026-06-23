@@ -36,6 +36,54 @@ function roundRect(w: number, h: number, adj: Adjust): string {
   ].join(' ');
 }
 
+function round1Rect(w: number, h: number, adj: Adjust): string {
+  const a = adj['adj'] ?? 0.16667;
+  const r = Math.min(w, h) * Math.min(0.5, a);
+  return [
+    `M${r},0`,
+    `L${w},0`,
+    `L${w},${h}`,
+    `L0,${h}`,
+    `L0,${r}`,
+    `Q0,0 ${r},0`,
+    'Z',
+  ].join(' ');
+}
+
+function round2SameRect(w: number, h: number, adj: Adjust): string {
+  const a1 = adj['adj1'] ?? 0.16667;
+  const a2 = adj['adj2'] ?? 0.16667;
+  const r1 = Math.min(w, h) * Math.min(0.5, a1);
+  const r2 = Math.min(w, h) * Math.min(0.5, a2);
+  return [
+    `M${r1},0`,
+    `L${w - r2},0`,
+    `Q${w},0 ${w},${r2}`,
+    `L${w},${h}`,
+    `L0,${h}`,
+    `L0,${r1}`,
+    `Q0,0 ${r1},0`,
+    'Z',
+  ].join(' ');
+}
+
+function round2DiagRect(w: number, h: number, adj: Adjust): string {
+  const a1 = adj['adj1'] ?? 0.16667;
+  const a2 = adj['adj2'] ?? 0.16667;
+  const r1 = Math.min(w, h) * Math.min(0.5, a1);
+  const r2 = Math.min(w, h) * Math.min(0.5, a2);
+  return [
+    `M${r1},0`,
+    `L${w},0`,
+    `L${w},${h - r2}`,
+    `Q${w},${h} ${w - r2},${h}`,
+    `L0,${h}`,
+    `L0,${r1}`,
+    `Q0,0 ${r1},0`,
+    'Z',
+  ].join(' ');
+}
+
 function poly(points: Array<[number, number]>): string {
   return (
     points.map(([x, y], i) => `${i === 0 ? 'M' : 'L'}${x},${y}`).join(' ') + ' Z'
@@ -48,10 +96,9 @@ const GENERATORS: Record<string, (w: number, h: number, adj: Adjust) => string> 
   ellipse: ellipse,
   flowChartConnector: ellipse,
   roundRect: roundRect,
-  // One/two-corner rounded variants: approximate by rounding all corners.
-  round1Rect: roundRect,
-  round2SameRect: roundRect,
-  round2DiagRect: roundRect,
+  round1Rect: round1Rect,
+  round2SameRect: round2SameRect,
+  round2DiagRect: round2DiagRect,
   triangle: (w, h) =>
     poly([
       [w / 2, 0],

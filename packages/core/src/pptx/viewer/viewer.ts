@@ -61,10 +61,43 @@ export class Viewer {
     this.resizeObserver = new ResizeObserver(() => this.applyScale());
     this.resizeObserver.observe(container);
 
+    // Load referenced fonts from Google Fonts if needed
+    if (typeof document !== 'undefined') {
+      const families = new Set<string>();
+      for (const slide of deck.slides) {
+        for (const shape of slide.shapes) {
+          findFonts(shape, families);
+        }
+      }
+      for (const family of families) {
+        const lower = family.toLowerCase();
+        if (
+          lower === 'arial' ||
+          lower === 'helvetica' ||
+          lower === 'times new roman' ||
+          lower === 'times' ||
+          lower === 'courier new' ||
+          lower === 'courier' ||
+          lower === 'georgia' ||
+          lower === 'verdana' ||
+          lower === 'trebuchet ms'
+        ) {
+          continue;
+        }
+        loadGoogleFont(family);
+      }
+    }
+
     // Install embedded fonts, then re-render so text uses the real font.
     this.fonts = installDeckFonts(deck);
     this.fonts.ready.then(() => {
-      if (this.slideEl) this.goTo(this.index);
+      if (typeof document !== 'undefined') {
+        document.fonts.ready.then(() => {
+          if (this.slideEl) this.goTo(this.index);
+        });
+      } else {
+        if (this.slideEl) this.goTo(this.index);
+      }
     });
 
     this.goTo(options.startIndex ?? 0);
@@ -173,4 +206,30 @@ export function createViewer(
   options?: ViewerOptions,
 ): Viewer {
   return new Viewer(deck, container, options);
+}
+
+function findFonts(shape: any, families: Set<string>) {
+  if (shape.text) {
+    for (const p of shape.text.paragraphs) {
+      for (const r of p.runs) {
+        if (r.font) families.add(r.font);
+      }
+    }
+  }
+  if (shape.children) {
+    for (const child of shape.children) {
+      findFonts(child, families);
+    }
+  }
+}
+
+function loadGoogleFont(family: string) {
+  if (typeof document === 'undefined') return;
+  const id = `gfont-${family.replace(/\s+/g, '-').toLowerCase()}`;
+  if (document.getElementById(id)) return;
+  const link = document.createElement('link');
+  link.id = id;
+  link.rel = 'stylesheet';
+  link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(family)}:ital,wght@0,300;0,400;0,600;0,700;1,300;1,400;1,600;1,700&display=swap`;
+  document.head.appendChild(link);
 }

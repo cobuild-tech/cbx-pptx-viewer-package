@@ -244,9 +244,8 @@ export function buildTextChain(
   if (lo) chain.push(lo);
   const mo = lstStyleOf(masterPh?.sp);
   if (mo) chain.push(mo);
-  if (ph) {
-    const masterStyle = child(ctx.masterTxStyles, masterStyleKey(ph.type));
-    if (masterStyle) chain.push(masterStyle);
-  }
+  const styleKey = masterStyleKey(ph?.type);
+  const masterStyle = child(ctx.masterTxStyles, styleKey);
+  if (masterStyle) chain.push(masterStyle);
   return new TextStyleChain(chain, ctx.colorCtx);
 }

@@ -48,22 +48,16 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
   const p = document.createElement('div');
   p.style.whiteSpace = body.wrap ? 'pre-wrap' : 'pre';
   p.style.margin = '0';
-  // Keep natural height when text exceeds the box; PowerPoint clips/overflows
-  // rather than letting flexbox compress paragraphs on top of each other.
   p.style.flexShrink = '0';
   p.style.boxSizing = 'border-box';
+  p.style.position = 'relative';
   if (para.align) {
     p.style.textAlign =
       para.align === 'ctr' ? 'center' : para.align === 'r' ? 'right' : para.align === 'just' ? 'justify' : 'left';
   }
-  if (para.marginLeftPx !== undefined) p.style.marginLeft = `${para.marginLeftPx}px`;
-  if (para.indentPx !== undefined) {
-    // A hanging indent (negative `indent`) makes room left of `marL` for a
-    // bullet. PowerPoint never renders the first line left of the paragraph's
-    // own left edge, so clamp it — otherwise a marL=0/negative-indent paragraph
-    // (e.g. a tab-stop "hang" with no bullet) spills out and clips its start.
-    const ml = para.marginLeftPx ?? 0;
-    p.style.textIndent = `${Math.max(para.indentPx, -ml)}px`;
+  if (para.marginLeftPx !== undefined) p.style.paddingLeft = `${para.marginLeftPx}px`;
+  if (para.indentPx !== undefined && !para.bullet) {
+    p.style.textIndent = `${para.indentPx}px`;
   }
   if (para.spaceBeforePt !== undefined) p.style.marginTop = `${ptToPx(para.spaceBeforePt)}px`;
   if (para.spaceAfterPt !== undefined) p.style.marginBottom = `${ptToPx(para.spaceAfterPt)}px`;
@@ -73,7 +67,13 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
   const bulletStr = bulletText(para.bullet, para.level, counters);
   if (bulletStr) {
     const b = document.createElement('span');
-    b.textContent = bulletStr + ' ';
+    b.textContent = bulletStr;
+    b.style.position = 'absolute';
+    const ml = para.marginLeftPx ?? 0;
+    const ind = para.indentPx ?? 0;
+    b.style.left = `${ml + ind}px`;
+    b.style.width = `${Math.abs(ind)}px`;
+    b.style.textAlign = 'left';
     if (para.bullet && 'color' in para.bullet && para.bullet.color) {
       b.style.color = colorToCss(para.bullet.color);
     }
