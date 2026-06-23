@@ -1,13 +1,15 @@
 /**
  * OPC (Open Packaging Conventions) reader.
  *
- * A .pptx is a ZIP whose entries ("parts") are addressed by path. Parts relate
- * to each other through relationship files (`_rels/<name>.rels`) that map a
- * relationship id (e.g. "rId3") to a target part. This class unzips the package
- * and exposes parts, their content types, and relationship resolution.
+ * An OOXML file (.pptx/.docx/.xlsx) is a ZIP whose entries ("parts") are
+ * addressed by path. Parts relate to each other through relationship files
+ * (`_rels/<name>.rels`) that map a relationship id (e.g. "rId3") to a target
+ * part. This class unzips the package and exposes parts, their content types,
+ * and relationship resolution. It is format-agnostic — no presentation/word
+ * knowledge lives here.
  */
 import { unzipSync } from 'fflate';
-import { parseXml, children, attr, type XmlNode } from '../xml.js';
+import { parseXml, children, attr, type XmlNode } from './xml.js';
 
 export interface Relationship {
   id: string;

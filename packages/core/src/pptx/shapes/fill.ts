@@ -1,25 +1,13 @@
 /**
  * Fill and stroke parsing: solid / gradient / image / pattern fills and outlines.
  * Colors are resolved through {@link ColorContext}; image fills resolve their
- * `r:embed` to a media part path via the current scope.
+ * `r:embed` to a media part path via the current {@link ParseScope}.
  */
-import { child, children, attr, attrNum, localName, type XmlNode } from '../xml.js';
-import { emuToPx } from '../units.js';
+import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
+import { emuToPx } from '../../oxml/units.js';
 import type { Fill, Stroke, GradientStop } from '../model.js';
-import {
-  resolveContainerColor,
-  resolveColorEl,
-  findColorEl,
-  type ColorContext,
-} from './color.js';
-
-export interface ParseScope {
-  colorCtx: ColorContext;
-  /** Resolve an `r:embed`/`r:link` id to a media part path. */
-  resolveImage(relId: string): string | undefined;
-  /** Resolve an `r:id` on a hyperlink to its (usually external) target URL. */
-  resolveHyperlink?(relId: string): string | undefined;
-}
+import { resolveContainerColor, resolveColorEl, findColorEl } from '../color.js';
+import type { ParseScope } from '../scope.js';
 
 const FILL_TAGS = ['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill'];
 
@@ -61,7 +49,7 @@ export function fillFromEl(el: XmlNode, scope: ParseScope): Fill {
   }
 }
 
-function parseGradient(el: XmlNode, ctx: ColorContext): Fill {
+function parseGradient(el: XmlNode, ctx: ParseScope['colorCtx']): Fill {
   const stops: GradientStop[] = [];
   for (const gs of children(child(el, 'gsLst'), 'gs')) {
     const pos = (attrNum(gs, 'pos') ?? 0) / 100000;

@@ -5,13 +5,14 @@
  * Cells covered by a horizontal/vertical merge are emitted as `null` so the
  * renderer can skip them while the spanning cell uses colSpan/rowSpan.
  */
-import { child, children, attrNum, attrBool, type XmlNode } from '../xml.js';
-import { emuToPx } from '../units.js';
+import { child, children, attrNum, attrBool, type XmlNode } from '../../oxml/xml.js';
+import { emuToPx } from '../../oxml/units.js';
 import type { Table, TableCell, Stroke } from '../model.js';
-import type { ColorContext } from '../resolve/color.js';
-import { type ParseScope, parseFill, strokeFromLn } from '../resolve/fill.js';
-import { parseTextBody } from './text.js';
-import { TextStyleChain } from '../resolve/textStyles.js';
+import type { ColorContext } from '../color.js';
+import type { ParseScope } from '../scope.js';
+import { parseFill, strokeFromLn } from '../shapes/fill.js';
+import { parseTextBody } from '../text/text.js';
+import { TextStyleChain } from '../text/textStyles.js';
 
 export function parseTable(tbl: XmlNode, ctx: ColorContext, scope: ParseScope): Table {
   const colWidths = children(child(tbl, 'tblGrid'), 'gridCol').map(

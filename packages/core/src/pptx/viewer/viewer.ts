@@ -11,7 +11,7 @@
  * On load it installs any fonts embedded in the deck (FontFace) and re-renders
  * once they're ready, so text reflows in the genuine font.
  */
-import type { Deck } from '../parse/deck.js';
+import type { Deck } from '../deck/deck.js';
 import { renderSlide } from '../render/dom.js';
 import { installDeckFonts, type FontInstallation } from '../render/fonts.js';
 

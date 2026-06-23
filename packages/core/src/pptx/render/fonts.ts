@@ -13,7 +13,7 @@
  * a format the browser can't decode (e.g. MicroType-compressed EOT) are skipped
  * and fall back to the system/substitute font.
  */
-import type { Deck } from '../parse/deck.js';
+import type { Deck } from '../deck/deck.js';
 
 export interface FontInstallation {
   /** Resolves once all loadable embedded fonts are registered. */

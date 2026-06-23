@@ -5,8 +5,8 @@
  * into SVG path data. Coordinates stay in the path's own EMU space (`<a:path w h>`);
  * the renderer scales them to the shape box via an SVG viewBox.
  */
-import { children, child, attr, attrNum, localName, type XmlNode } from '../xml.js';
-import type { CustomPath } from '../model.js';
+import { children, child, attr, attrNum, localName, type XmlNode } from '../../../oxml/xml.js';
+import type { CustomPath } from '../../model.js';
 
 interface Pt {
   x: number;
