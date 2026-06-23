@@ -23,10 +23,17 @@ import { renderTextBody } from '../text/render.js';
 import { applyEffects } from '../effects/render.js';
 import { renderShape } from '../render/dom.js';
 
-export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement {
-  const el = positioned(shape.transform);
-  const w = shape.transform?.w ?? 0;
-  const h = shape.transform?.h ?? 0;
+export function renderPreset(
+  shape: PresetShape,
+  deps: RenderDeps,
+  sx = 1,
+  sy = 1,
+  tx = 0,
+  ty = 0,
+): HTMLElement {
+  const el = positioned(shape.transform, sx, sy, tx, ty);
+  const w = (shape.transform?.w ?? 0) * sx;
+  const h = (shape.transform?.h ?? 0) * sy;
 
   if (shape.geom.type === 'preset') {
     const open = OPEN_PRESETS.has(shape.geom.preset);
@@ -39,57 +46,76 @@ export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement 
       if (shape.geom.preset !== 'rect') fillLayer.style.clipPath = `path('${d}')`;
       el.appendChild(fillLayer);
     }
-    if (shape.stroke) el.appendChild(strokeOverlay(d, w, h, shape.stroke, false));
+    if (shape.stroke) el.appendChild(strokeOverlay(d, w, h, shape.stroke, false, (sx + sy) / 2));
   } else {
     // Custom geometry: render each subpath in a scaled SVG.
     for (const p of shape.geom.paths) {
-      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, shape.fill, shape.stroke, deps));
+      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, shape.fill, shape.stroke, deps, (sx + sy) / 2));
     }
   }
 
-  if (shape.text) el.appendChild(renderTextBody(shape.text, deps));
+  if (shape.text) el.appendChild(renderTextBody(shape.text, deps, false, sx, sy));
   applyEffects(el, shape.effects);
   return el;
 }
 
-export function renderConnector(shape: ConnectorShape, deps: RenderDeps): HTMLElement {
-  const el = positioned(shape.transform);
-  const w = shape.transform?.w ?? 0;
-  const h = shape.transform?.h ?? 0;
+export function renderConnector(
+  shape: ConnectorShape,
+  deps: RenderDeps,
+  sx = 1,
+  sy = 1,
+  tx = 0,
+  ty = 0,
+): HTMLElement {
+  const el = positioned(shape.transform, sx, sy, tx, ty);
+  const w = (shape.transform?.w ?? 0) * sx;
+  const h = (shape.transform?.h ?? 0) * sy;
   applyEffects(el, shape.effects);
   if (!shape.stroke) return el;
   if (shape.geom.type === 'preset') {
     // Preset connector geometry is already in the shape's box (px) space.
     const d = presetPath(shape.geom.preset, w, h, shape.geom.adjust);
-    el.appendChild(strokeOverlay(d, w, h, shape.stroke, false));
+    el.appendChild(strokeOverlay(d, w, h, shape.stroke, false, (sx + sy) / 2));
   } else {
     // Custom geometry lives in the path's own EMU coordinate space; it must be
     // scaled into the box via a viewBox (as for shapes), otherwise the raw
     // path coordinates draw enormous strokes across the slide.
     for (const p of shape.geom.paths) {
-      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, undefined, shape.stroke, deps));
+      el.appendChild(customGeomSvg(p.d, p.w, p.h, w, h, undefined, shape.stroke, deps, (sx + sy) / 2));
     }
   }
   return el;
 }
 
-export function renderGroup(shape: GroupShape, deps: RenderDeps): HTMLElement {
-  const el = positioned(shape.transform);
+export function renderGroup(
+  shape: GroupShape,
+  deps: RenderDeps,
+  sx = 1,
+  sy = 1,
+  tx = 0,
+  ty = 0,
+): HTMLElement {
+  const el = positioned(shape.transform, sx, sy, tx, ty);
   const inner = document.createElement('div');
   inner.style.position = 'absolute';
   inner.style.left = '0';
   inner.style.top = '0';
-  inner.style.transformOrigin = '0 0';
+  inner.style.width = '100%';
+  inner.style.height = '100%';
 
   // Map the child coordinate space (chOff/chExt) onto the group box (off/ext).
   // Guard against a missing/degenerate child extent producing an enormous scale.
   const co = shape.childOffset;
-  const sx = co.w > 1 && shape.transform ? shape.transform.w / co.w : 1;
-  const sy = co.h > 1 && shape.transform ? shape.transform.h / co.h : 1;
-  inner.style.transform = `scale(${sx}, ${sy}) translate(${-co.x}px, ${-co.y}px)`;
+  const lsx = co.w > 1 && shape.transform ? shape.transform.w / co.w : 1;
+  const lsy = co.h > 1 && shape.transform ? shape.transform.h / co.h : 1;
+
+  const nextSx = sx * lsx;
+  const nextSy = sy * lsy;
+  const nextTx = -co.x * nextSx;
+  const nextTy = -co.y * nextSy;
 
   for (const childShape of shape.children) {
-    const childEl = renderShape(childShape, deps);
+    const childEl = renderShape(childShape, deps, nextSx, nextSy, nextTx, nextTy);
     if (childEl) inner.appendChild(childEl);
   }
   el.appendChild(inner);
@@ -102,6 +128,7 @@ function strokeOverlay(
   h: number,
   stroke: Stroke,
   fill: boolean,
+  scale = 1,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('width', `${w}`);
@@ -114,7 +141,7 @@ function strokeOverlay(
   path.setAttribute('fill', fill ? colorToCss(stroke.color) : 'none');
   if (!fill) {
     path.setAttribute('stroke', colorToCss(stroke.color));
-    path.setAttribute('stroke-width', `${stroke.width}`);
+    path.setAttribute('stroke-width', `${stroke.width * scale}`);
     if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash.join(','));
     if (stroke.cap) path.setAttribute('stroke-linecap', stroke.cap);
     applyLineEnds(svg, path, stroke);
@@ -250,6 +277,7 @@ function customGeomSvg(
   fill: Fill | undefined,
   stroke: Stroke | undefined,
   deps: RenderDeps,
+  scale = 1,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('width', `${w}`);
@@ -269,7 +297,7 @@ function customGeomSvg(
   path.setAttribute('fill', fillVal);
   if (stroke) {
     path.setAttribute('stroke', colorToCss(stroke.color));
-    path.setAttribute('stroke-width', `${stroke.width}`);
+    path.setAttribute('stroke-width', `${stroke.width * scale}`);
     path.setAttribute('vector-effect', 'non-scaling-stroke');
     if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash.join(','));
     applyLineEnds(svg, path, stroke);

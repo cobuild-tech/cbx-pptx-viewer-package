@@ -17,14 +17,20 @@ export interface RenderDeps {
 }
 
 /** Position + rotate/flip a shape container per its transform. */
-export function positioned(transform: Transform | undefined): HTMLDivElement {
+export function positioned(
+  transform: Transform | undefined,
+  sx = 1,
+  sy = 1,
+  tx = 0,
+  ty = 0,
+): HTMLDivElement {
   const el = document.createElement('div');
   el.style.position = 'absolute';
   if (transform) {
-    el.style.left = `${transform.x}px`;
-    el.style.top = `${transform.y}px`;
-    el.style.width = `${transform.w}px`;
-    el.style.height = `${transform.h}px`;
+    el.style.left = `${transform.x * sx + tx}px`;
+    el.style.top = `${transform.y * sy + ty}px`;
+    el.style.width = `${transform.w * sx}px`;
+    el.style.height = `${transform.h * sy}px`;
     const parts: string[] = [];
     if (transform.rot) parts.push(`rotate(${transform.rot}deg)`);
     if (transform.flipH || transform.flipV) {

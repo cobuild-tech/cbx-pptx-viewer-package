@@ -11,16 +11,23 @@ import { positioned, type RenderDeps } from '../render/primitives.js';
 import { presetPath } from '../shapes/geometry/presets.js';
 import { applyEffects } from '../effects/render.js';
 
-export function renderPicture(shape: PictureShape, deps: RenderDeps): HTMLElement | null {
+export function renderPicture(
+  shape: PictureShape,
+  deps: RenderDeps,
+  sx = 1,
+  sy = 1,
+  tx = 0,
+  ty = 0,
+): HTMLElement | null {
   const url = deps.imageUrl(shape.part);
   if (!url) return null;
-  const el = positioned(shape.transform);
+  const el = positioned(shape.transform, sx, sy, tx, ty);
   el.style.overflow = 'hidden';
 
   // Clip the image to a non-rectangular preset (e.g. cropped into a circle).
   if (shape.geom?.type === 'preset' && shape.geom.preset !== 'rect') {
-    const w = shape.transform?.w ?? 0;
-    const h = shape.transform?.h ?? 0;
+    const w = (shape.transform?.w ?? 0) * sx;
+    const h = (shape.transform?.h ?? 0) * sy;
     el.style.clipPath = `path('${presetPath(shape.geom.preset, w, h, shape.geom.adjust)}')`;
   }
 
@@ -46,8 +53,9 @@ export function renderPicture(shape: PictureShape, deps: RenderDeps): HTMLElemen
   }
   el.appendChild(img);
   if (shape.stroke) {
-    el.style.outline = `${shape.stroke.width}px solid ${colorToCss(shape.stroke.color)}`;
-    el.style.outlineOffset = `-${shape.stroke.width}px`;
+    const scale = (sx + sy) / 2;
+    el.style.outline = `${shape.stroke.width * scale}px solid ${colorToCss(shape.stroke.color)}`;
+    el.style.outlineOffset = `-${shape.stroke.width * scale}px`;
   }
   applyEffects(el, shape.effects);
   return el;

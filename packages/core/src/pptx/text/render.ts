@@ -11,17 +11,23 @@ import { ptToPx } from '../../oxml/units.js';
 import { colorToCss } from '../color.js';
 import type { RenderDeps } from '../render/primitives.js';
 
-export function renderTextBody(body: TextBody, _deps: RenderDeps, flow = false): HTMLDivElement {
+export function renderTextBody(
+  body: TextBody,
+  _deps: RenderDeps,
+  flow = false,
+  sx = 1,
+  sy = 1,
+): HTMLDivElement {
   const box = document.createElement('div');
   box.style.boxSizing = 'border-box';
   if (flow) {
-    box.style.padding = `${body.insets.t}px ${body.insets.r}px ${body.insets.b}px ${body.insets.l}px`;
+    box.style.padding = `${body.insets.t * sy}px ${body.insets.r * sx}px ${body.insets.b * sy}px ${body.insets.l * sx}px`;
   } else {
     box.style.position = 'absolute';
-    box.style.left = `${body.insets.l}px`;
-    box.style.top = `${body.insets.t}px`;
-    box.style.right = `${body.insets.r}px`;
-    box.style.bottom = `${body.insets.b}px`;
+    box.style.left = `${body.insets.l * sx}px`;
+    box.style.top = `${body.insets.t * sy}px`;
+    box.style.right = `${body.insets.r * sx}px`;
+    box.style.bottom = `${body.insets.b * sy}px`;
     box.style.display = 'flex';
     box.style.flexDirection = 'column';
     box.style.justifyContent =
@@ -34,7 +40,7 @@ export function renderTextBody(body: TextBody, _deps: RenderDeps, flow = false):
   // Track auto-number counters per level.
   const counters: number[] = [];
   for (const para of body.paragraphs) {
-    box.appendChild(renderParagraph(para, body, counters));
+    box.appendChild(renderParagraph(para, body, counters, sx, sy));
   }
   return box;
 }
@@ -44,7 +50,13 @@ export function anchorToValign(anchor: TextBody['anchor']): string {
   return anchor === 'ctr' ? 'middle' : anchor === 'bottom' ? 'bottom' : 'top';
 }
 
-function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): HTMLDivElement {
+function renderParagraph(
+  para: Paragraph,
+  body: TextBody,
+  counters: number[],
+  sx = 1,
+  sy = 1,
+): HTMLDivElement {
   const p = document.createElement('div');
   p.style.whiteSpace = body.wrap ? 'pre-wrap' : 'pre';
   p.style.margin = '0';
@@ -55,14 +67,14 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
     p.style.textAlign =
       para.align === 'ctr' ? 'center' : para.align === 'r' ? 'right' : para.align === 'just' ? 'justify' : 'left';
   }
-  if (para.marginLeftPx !== undefined) p.style.paddingLeft = `${para.marginLeftPx}px`;
+  if (para.marginLeftPx !== undefined) p.style.paddingLeft = `${para.marginLeftPx * sx}px`;
   if (para.indentPx !== undefined && !para.bullet) {
-    p.style.textIndent = `${para.indentPx}px`;
+    p.style.textIndent = `${para.indentPx * sx}px`;
   }
-  if (para.spaceBeforePt !== undefined) p.style.marginTop = `${ptToPx(para.spaceBeforePt)}px`;
-  if (para.spaceAfterPt !== undefined) p.style.marginBottom = `${ptToPx(para.spaceAfterPt)}px`;
+  if (para.spaceBeforePt !== undefined) p.style.marginTop = `${ptToPx(para.spaceBeforePt) * sy}px`;
+  if (para.spaceAfterPt !== undefined) p.style.marginBottom = `${ptToPx(para.spaceAfterPt) * sy}px`;
   if (para.lineSpacingPct !== undefined) p.style.lineHeight = `${para.lineSpacingPct}`;
-  else if (para.lineSpacingPt !== undefined) p.style.lineHeight = `${ptToPx(para.lineSpacingPt)}px`;
+  else if (para.lineSpacingPt !== undefined) p.style.lineHeight = `${ptToPx(para.lineSpacingPt) * sy}px`;
 
   const bulletStr = bulletText(para.bullet, para.level, counters);
   if (bulletStr) {
@@ -71,14 +83,22 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
     b.style.position = 'absolute';
     const ml = para.marginLeftPx ?? 0;
     const ind = para.indentPx ?? 0;
-    b.style.left = `${ml + ind}px`;
-    b.style.width = `${Math.abs(ind)}px`;
+    b.style.left = `${(ml + ind) * sx}px`;
+    b.style.width = `${Math.abs(ind) * sx}px`;
     b.style.textAlign = 'left';
     if (para.bullet && 'color' in para.bullet && para.bullet.color) {
       b.style.color = colorToCss(para.bullet.color);
     }
     if (para.bullet && para.bullet.type === 'char' && para.bullet.font) {
       b.style.fontFamily = para.bullet.font;
+    }
+    const firstRun = para.runs[0];
+    if (firstRun && firstRun.sizePt !== undefined) {
+      const pt = body.fontScale ? firstRun.sizePt * body.fontScale : firstRun.sizePt;
+      b.style.fontSize = `${ptToPx(pt) * sy}px`;
+      if (firstRun.font) {
+        b.style.fontFamily = `"${firstRun.font}", Arial, Helvetica, sans-serif`;
+      }
     }
     p.appendChild(b);
   }
@@ -88,7 +108,7 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
     p.appendChild(document.createTextNode('​'));
   }
   for (const run of para.runs) {
-    p.appendChild(renderRun(run, body.fontScale));
+    p.appendChild(renderRun(run, body.fontScale, sx, sy));
   }
   return p;
 }
@@ -109,7 +129,7 @@ function bulletText(bullet: Bullet | undefined, level: number, counters: number[
   return `${n}.`;
 }
 
-function renderRun(run: TextRun, fontScale: number | undefined): HTMLElement {
+function renderRun(run: TextRun, fontScale: number | undefined, sx = 1, sy = 1): HTMLElement {
   const span = document.createElement('span');
   span.textContent = run.text;
   if (run.bold) span.style.fontWeight = 'bold';
@@ -120,12 +140,12 @@ function renderRun(run: TextRun, fontScale: number | undefined): HTMLElement {
   if (decorations.length) span.style.textDecoration = decorations.join(' ');
   if (run.sizePt !== undefined) {
     const pt = fontScale ? run.sizePt * fontScale : run.sizePt;
-    span.style.fontSize = `${ptToPx(pt)}px`;
+    span.style.fontSize = `${ptToPx(pt) * sy}px`;
   }
   if (run.color) span.style.color = colorToCss(run.color);
   if (run.font) span.style.fontFamily = `"${run.font}", Arial, Helvetica, sans-serif`;
   if (run.highlight) span.style.backgroundColor = colorToCss(run.highlight);
-  if (run.letterSpacingPt) span.style.letterSpacing = `${ptToPx(run.letterSpacingPt)}px`;
+  if (run.letterSpacingPt) span.style.letterSpacing = `${ptToPx(run.letterSpacingPt) * sx}px`;
   if (run.caps === 'all') span.style.textTransform = 'uppercase';
   else if (run.caps === 'small') span.style.fontVariant = 'small-caps';
   if (run.baseline) {

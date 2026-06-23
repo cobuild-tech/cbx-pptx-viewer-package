@@ -32,30 +32,44 @@ export function renderSlide(slide: Slide, size: SlideSize, deps: RenderDeps): HT
 }
 
 /** Route a shape to its feature renderer. Also used by group recursion. */
-export function renderShape(shape: Shape, deps: RenderDeps): HTMLElement | null {
+export function renderShape(
+  shape: Shape,
+  deps: RenderDeps,
+  sx = 1,
+  sy = 1,
+  tx = 0,
+  ty = 0,
+): HTMLElement | null {
   switch (shape.kind) {
     case 'shape':
-      return renderPreset(shape, deps);
+      return renderPreset(shape, deps, sx, sy, tx, ty);
     case 'picture':
-      return renderPicture(shape, deps);
+      return renderPicture(shape, deps, sx, sy, tx, ty);
     case 'group':
-      return renderGroup(shape, deps);
+      return renderGroup(shape, deps, sx, sy, tx, ty);
     case 'connector':
-      return renderConnector(shape, deps);
+      return renderConnector(shape, deps, sx, sy, tx, ty);
     case 'frame':
-      return renderFrame(shape, deps);
+      return renderFrame(shape, deps, sx, sy, tx, ty);
   }
 }
 
-function renderFrame(shape: FrameShape, deps: RenderDeps): HTMLElement {
-  const el = positioned(shape.transform);
+function renderFrame(
+  shape: FrameShape,
+  deps: RenderDeps,
+  sx = 1,
+  sy = 1,
+  tx = 0,
+  ty = 0,
+): HTMLElement {
+  const el = positioned(shape.transform, sx, sy, tx, ty);
   if (shape.frameType === 'table' && shape.table) {
-    el.appendChild(renderTable(shape.table, deps));
+    el.appendChild(renderTable(shape.table, deps, sx, sy));
   } else if (shape.frameType === 'diagram' && shape.diagram?.length) {
     // SmartArt: the pre-laid-out shapes are positioned in the frame's own
     // coordinate space, so they drop straight into the (positioned) frame box.
     for (const s of shape.diagram) {
-      const child = renderShape(s, deps);
+      const child = renderShape(s, deps, sx, sy, 0, 0);
       if (child) el.appendChild(child);
     }
   } else {
