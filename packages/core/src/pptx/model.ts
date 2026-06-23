@@ -47,6 +47,17 @@ export interface Stroke {
   cap?: 'butt' | 'round' | 'square';
 }
 
+/**
+ * A visual effect from `<a:effectLst>` (or a theme `effectRef`). Offsets/radii
+ * are in px; the renderer maps these to CSS filters / box-reflect.
+ */
+export type Effect =
+  | { type: 'outerShadow'; dx: number; dy: number; blur: number; color: Color }
+  | { type: 'innerShadow'; dx: number; dy: number; blur: number; color: Color }
+  | { type: 'glow'; radius: number; color: Color }
+  | { type: 'softEdge'; radius: number }
+  | { type: 'reflection'; blur: number; dist: number; startAlpha: number; endAlpha: number };
+
 export type TextAlign = 'l' | 'ctr' | 'r' | 'just';
 export type VerticalAnchor = 'top' | 'ctr' | 'bottom';
 
@@ -132,6 +143,8 @@ interface ShapeBase {
   id?: string;
   name?: string;
   transform?: Transform;
+  /** Visual effects (shadow/glow/reflection/soft edge), in document order. */
+  effects?: Effect[];
 }
 
 export interface PresetShape extends ShapeBase {

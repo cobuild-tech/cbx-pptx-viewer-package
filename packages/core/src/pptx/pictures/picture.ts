@@ -14,6 +14,7 @@ import {
   resolveTransform,
   resolveGeometry,
   resolveStroke,
+  resolveEffects,
 } from '../shapes/props.js';
 import { placeholderOf, matchPlaceholder } from '../shapes/placeholders.js';
 
@@ -48,8 +49,12 @@ export function buildPic(pic: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): P
     shape.geom = resolveGeometry(spPr, layoutSpPr, masterSpPr);
   }
 
-  const stroke = resolveStroke(spPr, child(pic, 'style'), layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
+  const style = child(pic, 'style');
+  const stroke = resolveStroke(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
   if (stroke) shape.stroke = stroke;
+
+  const effects = resolveEffects(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
+  if (effects.length) shape.effects = effects;
 
   const srcRect = child(blipFill, 'srcRect');
   if (srcRect) {

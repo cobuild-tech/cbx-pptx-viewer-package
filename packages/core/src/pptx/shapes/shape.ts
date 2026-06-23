@@ -27,6 +27,7 @@ import {
   resolveTransform,
   resolveGeometry,
   resolveStroke,
+  resolveEffects,
   styleRefColor,
   buildTextChain,
 } from './props.js';
@@ -140,6 +141,7 @@ function buildSp(
 
   // Resolve stroke with inheritance.
   const stroke = resolveStroke(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
+  const effects = resolveEffects(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
 
   const shape: PresetShape = {
     kind: 'shape',
@@ -148,6 +150,7 @@ function buildSp(
   };
   if (transform) shape.transform = transform;
   if (stroke) shape.stroke = stroke;
+  if (effects.length) shape.effects = effects;
   if (ph) shape.placeholder = ph;
 
   const txBody = child(sp, 'txBody');

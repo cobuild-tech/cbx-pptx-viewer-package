@@ -18,6 +18,7 @@ import { colorToCss } from '../color.js';
 import { presetPath, OPEN_PRESETS } from './geometry/presets.js';
 import { SVG_NS, positioned, applyFillBackground, type RenderDeps } from '../render/primitives.js';
 import { renderTextBody } from '../text/render.js';
+import { applyEffects } from '../effects/render.js';
 import { renderShape } from '../render/dom.js';
 
 export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement {
@@ -45,6 +46,7 @@ export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement 
   }
 
   if (shape.text) el.appendChild(renderTextBody(shape.text, deps));
+  applyEffects(el, shape.effects);
   return el;
 }
 
@@ -52,6 +54,7 @@ export function renderConnector(shape: ConnectorShape, deps: RenderDeps): HTMLEl
   const el = positioned(shape.transform);
   const w = shape.transform?.w ?? 0;
   const h = shape.transform?.h ?? 0;
+  applyEffects(el, shape.effects);
   if (!shape.stroke) return el;
   if (shape.geom.type === 'preset') {
     // Preset connector geometry is already in the shape's box (px) space.
