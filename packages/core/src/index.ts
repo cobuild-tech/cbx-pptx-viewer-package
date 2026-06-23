@@ -20,6 +20,17 @@ export function loadPptx(data: ArrayBuffer | Uint8Array): Deck {
   return Deck.load(data);
 }
 
+// DOCX support
+export { DocxDocument } from './docx/document.js';
+export { renderDocument } from './docx/renderer.js';
+import { DocxDocument } from './docx/document.js';
+/** Load a .docx from raw bytes into a renderable {@link DocxDocument}. */
+export function loadDocx(data: ArrayBuffer | Uint8Array): DocxDocument {
+  return DocxDocument.load(data);
+}
+export * from './docx/model.js';
+
+
 // Lower-level building blocks for advanced users / tooling.
 export { OpcPackage, type Relationship } from './oxml/package.js';
 export { RelType } from './pptx/relTypes.js';
