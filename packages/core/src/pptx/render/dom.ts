@@ -11,6 +11,7 @@ import { applyFillBackground, positioned, type RenderDeps } from './primitives.j
 import { renderPreset, renderConnector, renderGroup } from '../shapes/render.js';
 import { renderPicture } from '../pictures/render.js';
 import { renderTable } from '../tables/render.js';
+import { renderChart } from '../charts/render.js';
 
 export type { RenderDeps } from './primitives.js';
 
@@ -58,6 +59,8 @@ function renderFrame(shape: FrameShape, deps: RenderDeps): HTMLElement {
       const child = renderShape(s, deps);
       if (child) el.appendChild(child);
     }
+  } else if (shape.frameType === 'chart' && shape.chart) {
+    el.appendChild(renderChart(shape.chart, shape.transform?.w ?? 0, shape.transform?.h ?? 0));
   } else {
     // Charts / unresolved diagrams / unknown: a labeled placeholder so it isn't invisible.
     el.style.display = 'flex';

@@ -37,6 +37,7 @@ import { buildPic } from '../pictures/picture.js';
 import { parseTable } from '../tables/table.js';
 import { parseTextBody } from '../text/text.js';
 import { resolveDiagramDrawing } from '../diagrams/diagram.js';
+import { parseChart } from '../charts/chart.js';
 
 export type { SlideBuildCtx, SlideScopes, BuildOpts, PartResolver } from './props.js';
 
@@ -223,6 +224,14 @@ function buildFrame(frame: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): Fram
     if (dg) {
       const shapes = buildShapes(dg.spTree, ctx, dg.scope);
       if (shapes.length) shape.diagram = shapes;
+    }
+  } else if (frameType === 'chart') {
+    const rid = attr(child(graphicData, 'chart'), 'r:id');
+    const part = rid ? ctx.parts.partForRel(rid) : undefined;
+    const chartXml = part ? ctx.parts.xml(part) : undefined;
+    if (chartXml) {
+      const chart = parseChart(chartXml, scope);
+      if (chart) shape.chart = chart;
     }
   }
   return shape;
