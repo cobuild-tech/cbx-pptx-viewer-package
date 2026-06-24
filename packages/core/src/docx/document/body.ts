@@ -247,8 +247,8 @@ function estimateParaHeight(para: DocxParagraph, contentWidthPx: number): number
   // Estimate total text length across all runs.
   const text = para.runs.map((r) => r.text).join('');
 
-  // Average character width ≈ 0.55× font height (proportional font approximation).
-  const avgCharW = fontPx * 0.55;
+  // Average character width ≈ 0.42× font height (proportional Latin text approximation).
+  const avgCharW = fontPx * 0.42;
   const usableW = Math.max(1, contentWidthPx - (para.indentLeftPx ?? 0));
   const charsPerLine = Math.max(1, Math.floor(usableW / avgCharW));
 

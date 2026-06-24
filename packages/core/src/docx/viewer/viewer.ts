@@ -1,14 +1,7 @@
 /**
  * DocxViewer controller: mounts a {@link DocxDocument} into a container and
- * renders all pages in a vertically scrollable stack.
- *
- * Unlike the PPTX viewer (one slide at a time), DOCX pages flow top-to-bottom
- * like a real document. Each page is a white card scaled to fill the container
- * width via CSS `zoom` (which adjusts layout dimensions, unlike `transform:
- * scale`). An IntersectionObserver tracks the most-visible page and fires
- * onChange so the React toolbar can show the current page number.
- *
- * `goTo(index)` / `next()` / `prev()` scroll to the target page smoothly.
+ * renders all pages in a vertically scrollable stack with a right-side
+ * thumbnail strip for quick navigation.
  */
 import type { DocxDocument } from '../document/document.js';
 import { renderPage } from '../render/dom.js';
@@ -21,11 +14,15 @@ export interface DocxViewerOptions {
   onChange?: (index: number, count: number) => void;
 }
 
+const SIDEBAR_W = 112; // px — thumbnail strip width
+
 export class DocxViewer {
   private readonly doc: DocxDocument;
   private readonly container: HTMLElement;
   private readonly scrollEl: HTMLDivElement;
+  private readonly sidebarEl: HTMLDivElement;
   private readonly pageEls: HTMLElement[] = [];
+  private readonly thumbEls: HTMLElement[] = [];
   private readonly onChange: DocxViewerOptions['onChange'];
   private index = 0;
   private resizeObserver: ResizeObserver | null = null;
@@ -37,26 +34,50 @@ export class DocxViewer {
     this.container = container;
     if (options.onChange) this.onChange = options.onChange;
 
-    // Fill the container with an absolutely-positioned scroll wrapper so the
-    // viewer owns the scroll context (the React wrapper just provides a div).
     container.style.position = 'relative';
 
+    // ── Outer flex shell (main scroll + sidebar) ──────────────────────────
+    const shell = document.createElement('div');
+    shell.style.position = 'absolute';
+    shell.style.inset = '0';
+    shell.style.display = 'flex';
+    shell.style.overflow = 'hidden';
+    container.appendChild(shell);
+
+    // ── Main scroll area ──────────────────────────────────────────────────
     this.scrollEl = document.createElement('div');
-    this.scrollEl.style.position = 'absolute';
-    this.scrollEl.style.inset = '0';
+    this.scrollEl.style.flex = '1';
+    this.scrollEl.style.minWidth = '0';
     this.scrollEl.style.overflowY = 'auto';
     this.scrollEl.style.overflowX = 'hidden';
     this.scrollEl.style.paddingTop = '28px';
     this.scrollEl.style.paddingBottom = '28px';
-    container.appendChild(this.scrollEl);
+    shell.appendChild(this.scrollEl);
 
-    // Render all pages into the scroll container.
+    // ── Thumbnail sidebar ─────────────────────────────────────────────────
+    this.sidebarEl = document.createElement('div');
+    this.sidebarEl.style.width = `${SIDEBAR_W}px`;
+    this.sidebarEl.style.flexShrink = '0';
+    this.sidebarEl.style.overflowY = 'auto';
+    this.sidebarEl.style.overflowX = 'hidden';
+    this.sidebarEl.style.background = '#2e2e2e';
+    this.sidebarEl.style.borderLeft = '1px solid #444';
+    this.sidebarEl.style.paddingTop = '12px';
+    this.sidebarEl.style.paddingBottom = '12px';
+    this.sidebarEl.style.display = 'flex';
+    this.sidebarEl.style.flexDirection = 'column';
+    this.sidebarEl.style.alignItems = 'center';
+    this.sidebarEl.style.gap = '8px';
+    shell.appendChild(this.sidebarEl);
+
+    // ── Render pages + thumbnails ─────────────────────────────────────────
+    const thumbW = SIDEBAR_W - 20; // 92px usable thumbnail width
+
     for (let i = 0; i < doc.pages.length; i++) {
       const page = doc.pages[i]!;
-      const pageEl = renderPage(page, { imageUrl: (p) => doc.imageUrl(p) }, i === doc.pages.length - 1);
+      const pageEl = renderPage(page, { imageUrl: (p) => doc.imageUrl(p) });
       pageEl.dataset.pageIndex = String(i);
 
-      // Wrapper centres each page card horizontally.
       const wrapper = document.createElement('div');
       wrapper.style.display = 'flex';
       wrapper.style.justifyContent = 'center';
@@ -64,9 +85,54 @@ export class DocxViewer {
       wrapper.appendChild(pageEl);
       this.scrollEl.appendChild(wrapper);
       this.pageEls.push(pageEl);
+
+      // Thumbnail card — renders actual page content scaled down
+      const thumbScale = thumbW / page.size.wPx;
+      const thumbH = Math.round(page.size.hPx * thumbScale);
+
+      const thumb = document.createElement('div');
+      thumb.style.width = `${thumbW}px`;
+      thumb.style.height = `${thumbH}px`;
+      thumb.style.flexShrink = '0';
+      thumb.style.border = '2px solid transparent';
+      thumb.style.borderRadius = '2px';
+      thumb.style.cursor = 'pointer';
+      thumb.style.position = 'relative';
+      thumb.style.overflow = 'hidden';
+      thumb.style.transition = 'border-color 0.15s';
+      thumb.title = `Page ${i + 1}`;
+
+      // Render page content at full size, then scale it down visually
+      const thumbPageEl = renderPage(page, { imageUrl: (p) => doc.imageUrl(p) });
+      thumbPageEl.style.boxShadow = 'none';
+      thumbPageEl.style.transformOrigin = 'top left';
+      thumbPageEl.style.transform = `scale(${thumbScale})`;
+      // pointer-events off so clicks pass through to the thumb wrapper
+      thumbPageEl.style.pointerEvents = 'none';
+      thumb.appendChild(thumbPageEl);
+
+      // Page number label overlaid at the bottom
+      const label = document.createElement('div');
+      label.textContent = String(i + 1);
+      label.style.position = 'absolute';
+      label.style.bottom = '0';
+      label.style.left = '0';
+      label.style.right = '0';
+      label.style.textAlign = 'center';
+      label.style.fontSize = '9px';
+      label.style.color = '#555';
+      label.style.background = 'rgba(255,255,255,0.8)';
+      label.style.lineHeight = '14px';
+      label.style.pointerEvents = 'none';
+      thumb.appendChild(label);
+
+      thumb.addEventListener('click', () => this.goTo(i));
+      this.sidebarEl.appendChild(thumb);
+      this.thumbEls.push(thumb);
     }
 
     this.applyZoom();
+    this.updateActiveThumb(0);
 
     this.resizeObserver = new ResizeObserver(() => this.applyZoom());
     this.resizeObserver.observe(container);
@@ -75,11 +141,9 @@ export class DocxViewer {
 
     if (options.keyboard !== false) this.enableKeyboard();
 
-    // Jump to starting page after a frame so the DOM is laid out.
     const start = options.startIndex ?? 0;
     if (start > 0) requestAnimationFrame(() => this.goTo(start));
 
-    // Fire initial onChange.
     this.onChange?.(0, this.count);
   }
 
@@ -91,7 +155,6 @@ export class DocxViewer {
     return this.index;
   }
 
-  /** Scroll smoothly to the given page index. */
   goTo(index: number): void {
     const clamped = Math.max(0, Math.min(this.doc.pages.length - 1, index));
     const wrapper = this.pageEls[clamped]?.parentElement;
@@ -100,28 +163,32 @@ export class DocxViewer {
     }
   }
 
-  next(): void {
-    this.goTo(this.index + 1);
-  }
+  next(): void { this.goTo(this.index + 1); }
+  prev(): void { this.goTo(this.index - 1); }
 
-  prev(): void {
-    this.goTo(this.index - 1);
-  }
-
-  /** Scale every page to fill the container width using CSS zoom. */
   private applyZoom(): void {
-    const cw = this.container.clientWidth;
-    if (!cw) return;
+    // Available width = shell width minus sidebar
+    const cw = this.container.clientWidth - SIDEBAR_W;
+    if (cw <= 0) return;
     for (let i = 0; i < this.pageEls.length; i++) {
       const pageEl = this.pageEls[i]!;
       const page = this.doc.pages[i]!;
       const zoom = Math.min(1, (cw - 48) / page.size.wPx);
-      // CSS zoom scales layout dimensions (unlike transform: scale).
       (pageEl.style as CSSStyleDeclaration & { zoom: string }).zoom = String(zoom);
     }
   }
 
-  /** Track which page is most visible and fire onChange. */
+  private updateActiveThumb(idx: number): void {
+    for (let i = 0; i < this.thumbEls.length; i++) {
+      const th = this.thumbEls[i]!;
+      const active = i === idx;
+      th.style.borderColor = active ? '#4a9eff' : 'transparent';
+      th.style.boxShadow = active ? '0 0 0 1px #4a9eff' : 'none';
+    }
+    // Scroll the active thumbnail into view in the sidebar.
+    this.thumbEls[idx]?.scrollIntoView({ block: 'nearest' });
+  }
+
   private setupIntersection(): void {
     if (typeof IntersectionObserver === 'undefined') return;
 
@@ -134,7 +201,6 @@ export class DocxViewer {
           const idx = Number(el.dataset.pageIndex ?? '-1');
           if (idx >= 0) ratios.set(idx, entry.intersectionRatio);
         }
-        // Pick the page with the highest visible ratio.
         let best = this.index;
         let bestRatio = -1;
         for (const [idx, ratio] of ratios) {
@@ -142,6 +208,7 @@ export class DocxViewer {
         }
         if (best !== this.index) {
           this.index = best;
+          this.updateActiveThumb(this.index);
           this.onChange?.(this.index, this.count);
         }
       },
@@ -155,25 +222,12 @@ export class DocxViewer {
     if (this.container.tabIndex < 0) this.container.tabIndex = 0;
     this.keyHandler = (e: KeyboardEvent) => {
       switch (e.key) {
-        case 'ArrowDown':
-        case 'PageDown':
-        case ' ':
-          e.preventDefault();
-          this.next();
-          break;
-        case 'ArrowUp':
-        case 'PageUp':
-          e.preventDefault();
-          this.prev();
-          break;
-        case 'Home':
-          e.preventDefault();
-          this.goTo(0);
-          break;
-        case 'End':
-          e.preventDefault();
-          this.goTo(this.count - 1);
-          break;
+        case 'ArrowDown': case 'PageDown': case ' ':
+          e.preventDefault(); this.next(); break;
+        case 'ArrowUp': case 'PageUp':
+          e.preventDefault(); this.prev(); break;
+        case 'Home': e.preventDefault(); this.goTo(0); break;
+        case 'End':  e.preventDefault(); this.goTo(this.count - 1); break;
       }
     };
     this.container.addEventListener('keydown', this.keyHandler);
@@ -183,7 +237,7 @@ export class DocxViewer {
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     if (this.keyHandler) this.container.removeEventListener('keydown', this.keyHandler);
-    this.scrollEl.remove();
+    this.container.querySelector('div')?.remove(); // remove shell
   }
 }
 

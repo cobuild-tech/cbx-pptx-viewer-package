@@ -31,12 +31,12 @@ export type { RenderDeps } from '../../pptx/render/primitives.js';
  * Render a single DocxPage into an HTML div.
  * Width is fixed to the page's paper width; height is auto (content-driven).
  */
-export function renderPage(page: DocxPage, deps: RenderDeps, isLast = false): HTMLDivElement {
+export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
   const root = document.createElement('div');
   root.className = 'docx-page';
   root.style.position = 'relative';
   root.style.width = `${page.size.wPx}px`;
-  if (isLast) root.style.minHeight = `${page.size.hPx}px`;
+  root.style.minHeight = `${page.size.hPx}px`;
   root.style.background = 'white';
   root.style.color = '#000000';
   root.style.boxSizing = 'border-box';
