@@ -4,18 +4,15 @@
  * Two-phase approach:
  *  1. Walk <w:body> and parse every element into a flat block list, tagging
  *     each block with any explicit page-break intent.
- *  2. Run a height-accumulating paginator: estimate each block's rendered
- *     height and flush to a new page when the content area would overflow.
- *
- * Height estimation uses resolved font sizes, paragraph spacing, and a
- * character-width heuristic for line wrapping. It won't be pixel-perfect
- * (that would require a full layout engine), but it distributes content
- * across the correct number of pages for typical documents.
+ *  2. Run a height-accumulating paginator that calls a supplied heightFn for
+ *     each block.  When the viewer supplies per-row heights for a table (an
+ *     array), the paginator splits the table at row boundaries so that it
+ *     flows naturally across pages — exactly as Word does.
  */
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipsToPx } from '../units.js';
 import { OpcPackage } from '../../oxml/package.js';
-import type { DocxBlock, DocxPage, DocxPageSize, DocxPageMargins, DocxParagraph } from '../model.js';
+import type { DocxBlock, DocxTable, DocxPage, DocxPageSize, DocxPageMargins, DocxParagraph } from '../model.js';
 import { StyleMap } from '../styles/styles.js';
 import { NumberingMap } from '../numbering/numbering.js';
 import { parseParagraph } from '../paragraphs/paragraph.js';
@@ -40,32 +37,75 @@ export interface BodyBuildCtx {
   numbering: NumberingMap;
 }
 
-// ─── Tagged block (internal) ──────────────────────────────────────────────────
+// ─── Public flat-content types ────────────────────────────────────────────────
 
-interface TaggedBlock {
+export interface DocxTaggedBlock {
   block: DocxBlock;
-  /** Force a page break before this block. */
   breakBefore: boolean;
-  /** Force a page break after this block. */
   breakAfter: boolean;
-  /** When a section change applies after this block. */
   nextSize?: DocxPageSize;
   nextMargins?: DocxPageMargins;
-  nextHeader?: DocxParagraph[];
-  nextFooter?: DocxParagraph[];
+  nextHeader?: DocxBlock[];
+  nextFooter?: DocxBlock[];
 }
 
-// ─── Entry point ─────────────────────────────────────────────────────────────
+export interface DocxFlatContent {
+  taggedBlocks: DocxTaggedBlock[];
+  initSize: DocxPageSize;
+  initMargins: DocxPageMargins;
+  initHeader?: DocxBlock[];
+  initFooter?: DocxBlock[];
+}
+
+/**
+ * Height function signature.
+ * - Returns a single number for non-table blocks.
+ * - Returns number[] (one entry per model row) for table blocks when the caller
+ *   has per-row measurements.  The paginator uses this array to split the table
+ *   at page boundaries.  Return a plain number to treat the table as a single
+ *   indivisible block (heuristic fallback behaviour).
+ */
+export type BlockHeightFn = (block: DocxBlock, contentWidthPx: number) => number | number[];
+
+// ─── Entry points ─────────────────────────────────────────────────────────────
+
+export function collectDocxContent(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxFlatContent {
+  const bodySectPrEl = bodyEl.children.slice().reverse().find(
+    (n) => localName(n.name) === 'sectPr',
+  );
+  const { size: initSize, margins: initMargins } = bodySectPrEl
+    ? readSectPr(bodySectPrEl)
+    : { size: DEFAULT_PG_SZ, margins: DEFAULT_PG_MARGINS };
+  const { header: initHeader, footer: initFooter } = bodySectPrEl
+    ? readHeaderFooter(bodySectPrEl, ctx)
+    : {};
+
+  const taggedBlocks = collectBlocks(bodyEl, ctx);
+  return { taggedBlocks, initSize, initMargins, initHeader, initFooter };
+}
+
+export function paginateDocxContent(
+  content: DocxFlatContent,
+  heightFn: BlockHeightFn = estimateBlockHeight,
+): DocxPage[] {
+  return paginate(
+    content.taggedBlocks,
+    content.initSize,
+    content.initMargins,
+    content.initHeader,
+    content.initFooter,
+    heightFn,
+  );
+}
 
 export function buildPages(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxPage[] {
-  const tagged = collectBlocks(bodyEl, ctx);
-  return paginate(tagged);
+  return paginateDocxContent(collectDocxContent(bodyEl, ctx));
 }
 
 // ─── Phase 1: collect all blocks with break metadata ─────────────────────────
 
-function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): TaggedBlock[] {
-  const out: TaggedBlock[] = [];
+function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxTaggedBlock[] {
+  const out: DocxTaggedBlock[] = [];
   const listCounters = new Map<string, number>();
 
   function resolveImage(relId: string): string | undefined {
@@ -87,37 +127,47 @@ function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): TaggedBlock[] {
 
       const { paragraphs, endsWithPageBreak } = parseParagraph(node, paraCtx);
 
-      // Inline drawings: extract before the paragraph text blocks.
+      const inlineImages: import('../model.js').DocxInlineImage[] = [];
       for (const childNode of node.children) {
         if (localName(childNode.name) === 'r') {
           for (const gc of childNode.children) {
             if (localName(gc.name) === 'drawing') {
               const img = parseDrawing(gc, resolveImage);
-              if (img) out.push({ block: img, breakBefore: false, breakAfter: false });
+              if (img) inlineImages.push(img);
             }
           }
         }
       }
 
-      for (let i = 0; i < paragraphs.length; i++) {
-        const para = paragraphs[i]!;
-        const isLast = i === paragraphs.length - 1;
+      const hasText = paragraphs.some(p => p.runs.some(r => r.text.trim()));
+      const skipPara = inlineImages.length > 0 && !hasText;
+
+      if (!skipPara) {
+        for (let i = 0; i < paragraphs.length; i++) {
+          const para = paragraphs[i]!;
+          const isLast = i === paragraphs.length - 1;
+          out.push({
+            block: para,
+            breakBefore: i === 0 && !!para.pageBreakBefore,
+            breakAfter: isLast && endsWithPageBreak,
+          });
+        }
+      }
+
+      for (let ii = 0; ii < inlineImages.length; ii++) {
         out.push({
-          block: para,
-          breakBefore: i === 0 && !!para.pageBreakBefore,
-          breakAfter: isLast && endsWithPageBreak,
+          block: inlineImages[ii]!,
+          breakBefore: false,
+          breakAfter: skipPara && ii === inlineImages.length - 1 && endsWithPageBreak,
         });
       }
 
-      // Section break in pPr → tag the last added block with next-section info.
       if (sectPr && out.length > 0) {
         const { size, margins } = readSectPr(sectPr);
         const sectType = attr(child(sectPr, 'type'), 'w:val') ?? attr(child(sectPr, 'type'), 'val') ?? 'nextPage';
         const { header, footer } = readHeaderFooter(sectPr, ctx);
         const last = out[out.length - 1]!;
-        if (sectType !== 'continuous') {
-          last.breakAfter = true;
-        }
+        if (sectType !== 'continuous') last.breakAfter = true;
         last.nextSize = size;
         last.nextMargins = margins;
         last.nextHeader = header;
@@ -128,7 +178,6 @@ function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): TaggedBlock[] {
       out.push({ block: parseTable(node, paraCtx), breakBefore: false, breakAfter: false });
 
     } else if (name === 'sectPr') {
-      // Final body-level sectPr: tag the last block (or create a sentinel).
       const { size, margins } = readSectPr(node);
       const { header, footer } = readHeaderFooter(node, ctx);
       if (out.length > 0) {
@@ -144,23 +193,26 @@ function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): TaggedBlock[] {
   return out;
 }
 
-// ─── Phase 2: height-accumulating paginator ───────────────────────────────────
+// ─── Phase 2: paginator with row-level table splitting ────────────────────────
 
-function paginate(tagged: TaggedBlock[]): DocxPage[] {
+function paginate(
+  tagged: DocxTaggedBlock[],
+  initSize: DocxPageSize,
+  initMargins: DocxPageMargins,
+  initHeader: DocxBlock[] | undefined,
+  initFooter: DocxBlock[] | undefined,
+  heightFn: BlockHeightFn,
+): DocxPage[] {
   const pages: DocxPage[] = [];
   let currentBlocks: DocxBlock[] = [];
-  let currentSize: DocxPageSize = DEFAULT_PG_SZ;
-  let currentMargins: DocxPageMargins = DEFAULT_PG_MARGINS;
-  let currentHeader: DocxParagraph[] | undefined;
-  let currentFooter: DocxParagraph[] | undefined;
+  let currentSize = initSize;
+  let currentMargins = initMargins;
+  let currentHeader = initHeader;
+  let currentFooter = initFooter;
   let accumulatedH = 0;
 
-  function contentH(): number {
-    return Math.max(200, currentSize.hPx - currentMargins.topPx - currentMargins.bottomPx);
-  }
-  function contentW(): number {
-    return Math.max(200, currentSize.wPx - currentMargins.leftPx - currentMargins.rightPx);
-  }
+  const contentH = () => Math.max(200, currentSize.hPx - currentMargins.topPx - currentMargins.bottomPx);
+  const contentW = () => Math.max(200, currentSize.wPx - currentMargins.leftPx - currentMargins.rightPx);
 
   function flush(): void {
     pages.push({
@@ -175,52 +227,104 @@ function paginate(tagged: TaggedBlock[]): DocxPage[] {
     accumulatedH = 0;
   }
 
+  function applySectionChange(
+    nextSize?: DocxPageSize,
+    nextMargins?: DocxPageMargins,
+    nextHeader?: DocxBlock[],
+    nextFooter?: DocxBlock[],
+  ): void {
+    if (nextSize) currentSize = nextSize;
+    if (nextMargins) currentMargins = nextMargins;
+    if (nextHeader !== undefined) currentHeader = nextHeader;
+    if (nextFooter !== undefined) currentFooter = nextFooter;
+  }
+
   for (const tagged_ of tagged) {
     const { block, breakBefore, breakAfter, nextSize, nextMargins, nextHeader, nextFooter } = tagged_;
-    const blockH = estimateBlockHeight(block, contentW());
 
-    // Explicit break before: flush whatever we have.
-    if (breakBefore && currentBlocks.length > 0) {
-      flush();
+    if (breakBefore && currentBlocks.length > 0) flush();
+
+    if (block.kind === 'table') {
+      // ── Table: split row-by-row when per-row heights are available ──────
+      const rawH = heightFn(block, contentW());
+
+      if (!Array.isArray(rawH)) {
+        // Heuristic single-height: treat as indivisible (legacy behaviour).
+        if (currentBlocks.length > 0 && accumulatedH + rawH > contentH()) flush();
+        currentBlocks.push(block);
+        accumulatedH += rawH;
+      } else {
+        // DOM-measured per-row heights: distribute rows across pages.
+        const rowHs = rawH;
+        let rowStart = 0;
+
+        while (rowStart < block.rows.length) {
+          const avail = contentH() - accumulatedH;
+
+          // Count rows that fit in the available space.
+          let rowsFit = 0;
+          let heightFit = 0;
+          for (let ri = rowStart; ri < rowHs.length; ri++) {
+            const rh = rowHs[ri] ?? 0;
+            if (heightFit + rh > avail && rowsFit > 0) break;
+            rowsFit++;
+            heightFit += rh;
+          }
+
+          if (rowsFit === 0) {
+            // Nothing fits in the remaining space.
+            if (currentBlocks.length > 0) {
+              // Flush current page and retry with a fresh page.
+              flush();
+              continue;
+            }
+            // Already on a fresh page — force at least one row to prevent
+            // an infinite loop (happens when a single row is taller than the page).
+            rowsFit = 1;
+            heightFit = rowHs[rowStart] ?? 0;
+          }
+
+          const rowEnd = Math.min(rowStart + rowsFit, block.rows.length);
+          const subTable: DocxTable = {
+            kind: 'table',
+            widthPx: block.widthPx,
+            colWidths: block.colWidths,
+            rows: block.rows.slice(rowStart, rowEnd),
+          };
+
+          currentBlocks.push(subTable);
+          accumulatedH += heightFit;
+          rowStart = rowEnd;
+
+          // If more rows remain, flush to start a fresh page.
+          if (rowStart < block.rows.length) flush();
+        }
+      }
+
+    } else {
+      // ── Non-table block ────────────────────────────────────────────────
+      const blockH = heightFn(block, contentW()) as number;
+      if (currentBlocks.length > 0 && accumulatedH + blockH > contentH()) flush();
+      currentBlocks.push(block);
+      accumulatedH += blockH;
     }
 
-    // Auto-break: block would overflow the current page.
-    // Skip auto-break on the very first block of a page to avoid infinite loops.
-    if (
-      currentBlocks.length > 0 &&
-      accumulatedH + blockH > contentH()
-    ) {
-      flush();
-    }
-
-    currentBlocks.push(block);
-    accumulatedH += blockH;
-
-    // Explicit break after (page break run or non-continuous section break).
     if (breakAfter) {
       flush();
-      if (nextSize) currentSize = nextSize;
-      if (nextMargins) currentMargins = nextMargins;
-      if (nextHeader !== undefined) currentHeader = nextHeader;
-      if (nextFooter !== undefined) currentFooter = nextFooter;
+      applySectionChange(nextSize, nextMargins, nextHeader, nextFooter);
     } else if (nextSize) {
-      // Continuous section: geometry update only, no flush.
-      currentSize = nextSize;
-      currentMargins = nextMargins ?? currentMargins;
+      applySectionChange(nextSize, nextMargins, nextHeader, nextFooter);
     }
   }
 
-  // Flush any remaining content.
-  if (currentBlocks.length > 0 || pages.length === 0) {
-    flush();
-  }
+  if (currentBlocks.length > 0 || pages.length === 0) flush();
 
   return pages;
 }
 
-// ─── Height estimation ────────────────────────────────────────────────────────
+// ─── Heuristic height estimator (fallback when no DOM available) ──────────────
 
-function estimateBlockHeight(block: DocxBlock, contentWidthPx: number): number {
+export function estimateBlockHeight(block: DocxBlock, contentWidthPx: number): number {
   switch (block.kind) {
     case 'paragraph': return estimateParaHeight(block, contentWidthPx);
     case 'table':     return estimateTableHeight(block, contentWidthPx);
@@ -230,9 +334,7 @@ function estimateBlockHeight(block: DocxBlock, contentWidthPx: number): number {
 
 const PT_TO_PX = 96 / 72;
 
-/** Resolved font size in px for a paragraph, falling back to style defaults. */
 function paraFontPx(para: DocxParagraph): number {
-  // Prefer per-run size, then style-chain base, then 11pt fallback.
   for (const run of para.runs) {
     if (run.sizePt && run.sizePt > 0) return run.sizePt * PT_TO_PX;
   }
@@ -243,39 +345,35 @@ function paraFontPx(para: DocxParagraph): number {
 function estimateParaHeight(para: DocxParagraph, contentWidthPx: number): number {
   const fontPx = paraFontPx(para);
   const lineH = fontPx * (para.lineSpacingPct ?? 1.15);
-
-  // Estimate total text length across all runs.
   const text = para.runs.map((r) => r.text).join('');
-
-  // Average character width ≈ 0.42× font height (proportional Latin text approximation).
-  const avgCharW = fontPx * 0.42;
+  const avgCharW = fontPx * 0.5;
   const usableW = Math.max(1, contentWidthPx - (para.indentLeftPx ?? 0));
   const charsPerLine = Math.max(1, Math.floor(usableW / avgCharW));
-
-  // At least 1 line even for empty paragraphs.
   const lines = text.length === 0 ? 1 : Math.max(1, Math.ceil(text.length / charsPerLine));
-
   const beforePx = (para.spaceBeforePt ?? 0) * PT_TO_PX;
-  const afterPx = (para.spaceAfterPt ?? 0) * PT_TO_PX;
-
+  const afterPx  = (para.spaceAfterPt  ?? 0) * PT_TO_PX;
   return lines * lineH + beforePx + afterPx;
 }
 
-function estimateTableHeight(table: import('../model.js').DocxTable, contentWidthPx: number): number {
+function estimateTableHeight(table: DocxTable, contentWidthPx: number): number {
+  const totalColW = table.colWidths.reduce((s, w) => s + w, 0) || contentWidthPx;
   let total = 0;
-  for (const row of table.rows) {
+  for (let r = 0; r < table.rows.length; r++) {
+    const row = table.rows[r]!;
     let rowH = 0;
-    for (const cell of row) {
+    for (let c = 0; c < row.length; c++) {
+      const cell = row[c];
       if (!cell) continue;
-      let cellH = 8; // top + bottom padding
+      const colW = table.colWidths[c] ?? (totalColW / Math.max(1, table.colWidths.length));
+      let cellH = 4;
       for (const para of cell.content) {
-        cellH += estimateParaHeight(para, contentWidthPx / Math.max(1, table.colWidths.length));
+        cellH += estimateParaHeight(para, colW - 14);
       }
       rowH = Math.max(rowH, cellH);
     }
     total += rowH;
   }
-  return total + 4; // table margin
+  return total;
 }
 
 // ─── Section helpers ──────────────────────────────────────────────────────────
@@ -310,7 +408,7 @@ function readSectPr(sectPr: XmlNode): { size: DocxPageSize; margins: DocxPageMar
 function readHeaderFooter(
   sectPr: XmlNode,
   ctx: BodyBuildCtx,
-): { header?: DocxParagraph[]; footer?: DocxParagraph[] } {
+): { header?: DocxBlock[]; footer?: DocxBlock[] } {
   const headerRef = children(sectPr, 'headerReference').find(
     (el) => (attr(el, 'w:type') ?? attr(el, 'type')) === 'default',
   );
@@ -318,8 +416,8 @@ function readHeaderFooter(
     (el) => (attr(el, 'w:type') ?? attr(el, 'type')) === 'default',
   );
 
-  let header: DocxParagraph[] | undefined;
-  let footer: DocxParagraph[] | undefined;
+  let header: DocxBlock[] | undefined;
+  let footer: DocxBlock[] | undefined;
 
   if (headerRef) {
     const rId = attr(headerRef, 'r:id') ?? attr(headerRef, 'id');
@@ -342,8 +440,8 @@ function readHeaderFooter(
   return { header, footer };
 }
 
-function parseHeaderFooterPart(xml: XmlNode, ctx: BodyBuildCtx, part: string): DocxParagraph[] {
-  const paras: DocxParagraph[] = [];
+function parseHeaderFooterPart(xml: XmlNode, ctx: BodyBuildCtx, part: string): DocxBlock[] {
+  const blocks: DocxBlock[] = [];
   const listCounters = new Map<string, number>();
   const resolveImage = (relId: string) => ctx.pkg.resolveRel(part, relId)?.target;
   const resolveHyperlink = (relId: string) => {
@@ -354,8 +452,23 @@ function parseHeaderFooterPart(xml: XmlNode, ctx: BodyBuildCtx, part: string): D
   for (const node of xml.children) {
     if (localName(node.name) === 'p') {
       const { paragraphs } = parseParagraph(node, paraCtx);
-      paras.push(...paragraphs);
+
+      const imgs: import('../model.js').DocxInlineImage[] = [];
+      for (const childNode of node.children) {
+        if (localName(childNode.name) === 'r') {
+          for (const gc of childNode.children) {
+            if (localName(gc.name) === 'drawing') {
+              const img = parseDrawing(gc, resolveImage);
+              if (img) imgs.push(img);
+            }
+          }
+        }
+      }
+
+      const hasText = paragraphs.some(p => p.runs.some(r => r.text.trim()));
+      if (imgs.length === 0 || hasText) blocks.push(...paragraphs);
+      blocks.push(...imgs);
     }
   }
-  return paras;
+  return blocks;
 }

@@ -8,6 +8,7 @@
  * Shared types (TextRun, Bullet, Color, Fill, Stroke) are re-exported from the
  * PPTX model since Word uses the same DrawingML primitives.
  */
+import type { Stroke } from '../pptx/model.js';
 
 export type {
   Color,
@@ -73,6 +74,12 @@ export interface DocxParagraph {
   keepTogether?: boolean;
   pageBreakBefore?: boolean;
   shadingHex?: string;
+  /** Right indent in px. */
+  indentRightPx?: number;
+  /** Suppress spacing between consecutive paragraphs with the same style. */
+  contextualSpacing?: boolean;
+  /** Paragraph-level borders (from <w:pBdr>). */
+  paraBorders?: Partial<{ top: Stroke; bottom: Stroke; left: Stroke; right: Stroke }>;
 }
 
 export interface DocxTable {
@@ -97,6 +104,8 @@ export interface DocxTableCell {
     b: import('../pptx/model.js').Stroke;
   }>;
   vAlign?: 'top' | 'center' | 'bottom';
+  /** Cell padding in px from <w:tcMar> or table-level <w:tblCellMar>. */
+  cellPaddingPx?: { top: number; right: number; bottom: number; left: number };
 }
 
 export interface DocxInlineImage {
@@ -120,8 +129,8 @@ export interface DocxPage {
   size: DocxPageSize;
   margins: DocxPageMargins;
   elements: DocxBlock[];
-  header?: DocxParagraph[];
-  footer?: DocxParagraph[];
+  header?: DocxBlock[];
+  footer?: DocxBlock[];
 }
 
 // ─── Document ────────────────────────────────────────────────────────────────

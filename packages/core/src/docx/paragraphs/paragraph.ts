@@ -8,7 +8,9 @@ import { child, children, attr, localName, type XmlNode } from '../../oxml/xml.j
 import { twipsToPx } from '../units.js';
 import type { DocxParagraph, DocxBlock } from '../model.js';
 import type { TextRun } from '../model.js';
+import type { Stroke } from '../model.js';
 import { StyleMap, mergeParaProps, mergeRunProps } from '../styles/styles.js';
+import type { ParaBorderSide } from '../styles/styles.js';
 import { NumberingMap } from '../numbering/numbering.js';
 import { parseRun, runHasPageBreak } from './run.js';
 import { parseDrawing } from '../images/image.js';
@@ -165,5 +167,26 @@ function buildParagraph(
     level: bullet ? level : undefined,
     pageBreakBefore: pageBreakBefore || undefined,
     shadingHex: para.shadingHex,
+    indentRightPx: para.indentRightPx,
+    contextualSpacing: para.contextualSpacing,
+    paraBorders: para.pBdr ? buildParaBorders(para.pBdr) : undefined,
   };
+}
+
+function buildParaBorders(
+  pBdr: Partial<Record<'top' | 'bottom' | 'left' | 'right', ParaBorderSide>>,
+): DocxParagraph['paraBorders'] {
+  const out: NonNullable<DocxParagraph['paraBorders']> = {};
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    const s = pBdr[side];
+    if (!s) continue;
+    const isDashed = s.type === 'dashed' || s.type === 'dotted';
+    const stroke: Stroke = {
+      color: { hex: s.colorHex },
+      width: s.widthPx,
+      ...(isDashed ? { dash: [4, 3] } : {}),
+    };
+    out[side] = stroke;
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }

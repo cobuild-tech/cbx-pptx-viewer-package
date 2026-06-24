@@ -71,6 +71,9 @@ export function parseRun(
   if (style.fontAscii || style.fontHAnsi) run.font = style.fontAscii ?? style.fontHAnsi;
   if (style.caps) run.caps = style.caps;
   if (style.highlight) run.highlight = highlightNameToColor(style.highlight);
+  if (style.letterSpacingPt !== undefined && style.letterSpacingPt !== 0) {
+    run.letterSpacingPt = style.letterSpacingPt;
+  }
 
   // Vertical alignment (super/subscript).
   if (rPr) {

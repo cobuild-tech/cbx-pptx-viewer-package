@@ -6,8 +6,15 @@
  * Each style inherits from its <w:basedOn> parent, ultimately rooting at Normal.
  */
 import { child, children, attr, attrNum, attrBool, type XmlNode } from '../../oxml/xml.js';
-import { halfPtToPt, twipsToPx } from '../units.js';
+import { halfPtToPt, twipsToPx, borderSzToPx } from '../units.js';
 import type { TextAlign } from '../model.js';
+
+export interface ParaBorderSide {
+  colorHex: string;
+  widthPx: number;
+  type: string;
+  spacePt: number;
+}
 
 export interface ResolvedRunStyle {
   bold?: boolean;
@@ -22,6 +29,8 @@ export interface ResolvedRunStyle {
   caps?: 'all' | 'small';
   /** Highlight color name (yellow, green, cyan, etc.). */
   highlight?: string;
+  /** Character spacing in pt (from <w:spacing> in rPr, which is in 20ths of a pt). */
+  letterSpacingPt?: number;
 }
 
 export interface ResolvedParaStyle {
@@ -37,6 +46,9 @@ export interface ResolvedParaStyle {
   ilvl?: number;
   outlineLevel?: number;
   shadingHex?: string;
+  indentRightPx?: number;
+  contextualSpacing?: boolean;
+  pBdr?: Partial<Record<'top' | 'bottom' | 'left' | 'right', ParaBorderSide>>;
 }
 
 export interface ResolvedStyle {
@@ -150,7 +162,25 @@ export function mergeRunProps(out: ResolvedRunStyle, rPr: XmlNode): void {
   const colorEl = child(rPr, 'color');
   if (colorEl) {
     const hex = attr(colorEl, 'w:val') ?? attr(colorEl, 'val');
-    if (hex && hex !== 'auto') out.colorHex = hex.toUpperCase();
+    const themeColor = attr(colorEl, 'w:themeColor') ?? attr(colorEl, 'themeColor');
+    if (themeColor) {
+      const tc = themeColor.toLowerCase();
+      // Dark/text theme slots → always black text.
+      if (tc === 'dark1' || tc === 'dk1' || tc === 'text1' || tc === 'tx1') {
+        out.colorHex = '000000';
+      } else if (tc === 'dark2' || tc === 'dk2' || tc === 'text2' || tc === 'tx2') {
+        out.colorHex = '000000';
+      } else if (tc === 'light1' || tc === 'lt1' || tc === 'background1' || tc === 'bg1') {
+        // Light/background slot — leave unset so text inherits the page default.
+      } else if (tc === 'light2' || tc === 'lt2' || tc === 'background2' || tc === 'bg2') {
+        // Light/background slot — leave unset so text inherits the page default.
+      } else {
+        // Accent, hyperlink, etc. — trust the cached w:val fallback.
+        if (hex && hex !== 'auto') out.colorHex = hex.toUpperCase();
+      }
+    } else if (hex && hex !== 'auto') {
+      out.colorHex = hex.toUpperCase();
+    }
   }
   const fontsEl = child(rPr, 'rFonts');
   if (fontsEl) {
@@ -174,6 +204,12 @@ export function mergeRunProps(out: ResolvedRunStyle, rPr: XmlNode): void {
     const hl = attr(hlEl, 'w:val') ?? attr(hlEl, 'val');
     if (hl && hl !== 'none') out.highlight = hl;
   }
+  // Character spacing (w:spacing in rPr is in twentieths of a point)
+  const runSpacingEl = child(rPr, 'spacing');
+  if (runSpacingEl) {
+    const sp = attrNum(runSpacingEl, 'w:val') ?? attrNum(runSpacingEl, 'val');
+    if (sp !== undefined) out.letterSpacingPt = sp / 20;
+  }
 }
 
 export function mergeParaProps(out: ResolvedParaStyle, pPr: XmlNode): void {
@@ -187,9 +223,11 @@ export function mergeParaProps(out: ResolvedParaStyle, pPr: XmlNode): void {
     const left = attrNum(indEl, 'w:left') ?? attrNum(indEl, 'left');
     const firstLine = attrNum(indEl, 'w:firstLine') ?? attrNum(indEl, 'firstLine');
     const hanging = attrNum(indEl, 'w:hanging') ?? attrNum(indEl, 'hanging');
+    const right = attrNum(indEl, 'w:right') ?? attrNum(indEl, 'right');
     if (left !== undefined) out.indentLeftPx = twipsToPx(left);
     if (firstLine !== undefined) out.indentFirstLinePx = twipsToPx(firstLine);
     if (hanging !== undefined) out.indentFirstLinePx = -twipsToPx(hanging);
+    if (right !== undefined) out.indentRightPx = twipsToPx(right);
   }
   const spcEl = child(pPr, 'spacing');
   if (spcEl) {
@@ -215,6 +253,31 @@ export function mergeParaProps(out: ResolvedParaStyle, pPr: XmlNode): void {
     if (numId !== undefined) out.numId = numId;
     if (ilvl !== undefined) out.ilvl = ilvl;
   }
+  // Contextual spacing
+  const ctxSpcEl = child(pPr, 'contextualSpacing');
+  if (ctxSpcEl) {
+    const val = attr(ctxSpcEl, 'w:val') ?? attr(ctxSpcEl, 'val');
+    out.contextualSpacing = val === undefined || (val !== '0' && val !== 'false');
+  }
+
+  // Paragraph borders
+  const pBdrEl = child(pPr, 'pBdr');
+  if (pBdrEl) {
+    const bdr: Partial<Record<'top' | 'bottom' | 'left' | 'right', ParaBorderSide>> = {};
+    for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+      const sideEl = child(pBdrEl, side);
+      if (!sideEl) continue;
+      const val = attr(sideEl, 'w:val') ?? attr(sideEl, 'val');
+      if (!val || val === 'none' || val === 'nil') continue;
+      const sz = attrNum(sideEl, 'w:sz') ?? attrNum(sideEl, 'sz') ?? 4;
+      const colorHex = attr(sideEl, 'w:color') ?? attr(sideEl, 'color');
+      const space = attrNum(sideEl, 'w:space') ?? attrNum(sideEl, 'space') ?? 0;
+      const hex = colorHex && colorHex !== 'auto' ? colorHex.toUpperCase() : '000000';
+      bdr[side] = { colorHex: hex, widthPx: borderSzToPx(sz), type: val, spacePt: space };
+    }
+    if (Object.keys(bdr).length > 0) out.pBdr = bdr;
+  }
+
   const outlineEl = child(pPr, 'outlineLvl');
   if (outlineEl) {
     const lvl = attrNum(outlineEl, 'w:val') ?? attrNum(outlineEl, 'val');

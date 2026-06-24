@@ -28,9 +28,9 @@ export function parseTable(tblEl: XmlNode, ctx: ParagraphParseCtx): DocxTable {
     if (tblWType === 'dxa' && tblWVal !== undefined) widthPx = twipsToPx(tblWVal);
   }
 
-  // Table-level default borders (used when cells don't specify their own).
-  const tblBorders = child(tblPr, 'tblBorders');
-  const defaultBorders = parseBorderSet(tblBorders);
+  // Table-level borders (outer + insideH/V) and default cell margins.
+  const tblBorders = parseTableBorders(child(tblPr, 'tblBorders'));
+  const defaultCellPadding = parseMarginSet(child(tblPr, 'tblCellMar'));
 
   const numCols = colWidths.length;
   const rawRows: RawCell[][] = [];
@@ -38,13 +38,16 @@ export function parseTable(tblEl: XmlNode, ctx: ParagraphParseCtx): DocxTable {
   for (const trEl of children(tblEl, 'tr')) {
     const rawRow: RawCell[] = [];
     for (const tcEl of children(trEl, 'tc')) {
-      rawRow.push(parseRawCell(tcEl, ctx, defaultBorders));
+      rawRow.push(parseRawCell(tcEl, ctx, defaultCellPadding));
     }
     rawRows.push(rawRow);
   }
 
   // Expand spans into a full grid (rows × cols), nulling covered cells.
   const rows: (DocxTableCell | null)[][] = buildGrid(rawRows, numCols);
+
+  // Apply table-level border inheritance per cell position.
+  applyTableBorders(rows, tblBorders);
 
   return { kind: 'table', widthPx, colWidths, rows };
 }
@@ -57,6 +60,12 @@ interface RawCell {
   vMerge: boolean;
   /** True if this cell starts a vertical merge group. */
   vMergeRestart: boolean;
+}
+
+interface TableBorderDef {
+  outer: Partial<Record<'l' | 't' | 'r' | 'b', Stroke>>;
+  insideH?: Stroke;
+  insideV?: Stroke;
 }
 
 // ─── Grid builder ─────────────────────────────────────────────────────────────
@@ -107,12 +116,59 @@ function buildGrid(rawRows: RawCell[][], numCols: number): (DocxTableCell | null
   return grid;
 }
 
+// ─── Border inheritance ────────────────────────────────────────────────────────
+
+/**
+ * Apply table-level border defaults to each cell based on its position in the
+ * grid. Cell-level borders (already set on the cell) take priority. Outer table
+ * borders apply to the outermost edges; insideH/V fill interior boundaries.
+ */
+function applyTableBorders(
+  grid: (DocxTableCell | null)[][],
+  tblBorders: TableBorderDef,
+): void {
+  const numRows = grid.length;
+  if (numRows === 0) return;
+  const numCols = grid[0]!.length;
+
+  for (let r = 0; r < numRows; r++) {
+    for (let c = 0; c < numCols; c++) {
+      const cell = grid[r]?.[c];
+      if (!cell) continue;
+
+      const existing = cell.borders ?? {};
+      const resolved: Partial<Record<'l' | 't' | 'r' | 'b', Stroke>> = {};
+
+      const lastRow = r + cell.rowSpan - 1;
+      const lastCol = c + cell.colSpan - 1;
+
+      if (existing.t !== undefined) resolved.t = existing.t;
+      else if (r === 0 && tblBorders.outer.t) resolved.t = tblBorders.outer.t;
+      else if (r > 0 && tblBorders.insideH) resolved.t = tblBorders.insideH;
+
+      if (existing.b !== undefined) resolved.b = existing.b;
+      else if (lastRow === numRows - 1 && tblBorders.outer.b) resolved.b = tblBorders.outer.b;
+      else if (lastRow < numRows - 1 && tblBorders.insideH) resolved.b = tblBorders.insideH;
+
+      if (existing.l !== undefined) resolved.l = existing.l;
+      else if (c === 0 && tblBorders.outer.l) resolved.l = tblBorders.outer.l;
+      else if (c > 0 && tblBorders.insideV) resolved.l = tblBorders.insideV;
+
+      if (existing.r !== undefined) resolved.r = existing.r;
+      else if (lastCol === numCols - 1 && tblBorders.outer.r) resolved.r = tblBorders.outer.r;
+      else if (lastCol < numCols - 1 && tblBorders.insideV) resolved.r = tblBorders.insideV;
+
+      cell.borders = resolved;
+    }
+  }
+}
+
 // ─── Cell parsing ─────────────────────────────────────────────────────────────
 
 function parseRawCell(
   tcEl: XmlNode,
   ctx: ParagraphParseCtx,
-  defaultBorders: Partial<Record<'l' | 't' | 'r' | 'b', Stroke>>,
+  defaultCellPadding: { top: number; right: number; bottom: number; left: number } | undefined,
 ): RawCell {
   const tcPr = child(tcEl, 'tcPr');
 
@@ -124,8 +180,9 @@ function parseRawCell(
   const vMergeRestart = vMerge && vMergeRestartVal === 'restart';
 
   const fill = parseCellFill(tcPr);
-  const borders = parseBorderSet(child(tcPr, 'tcBorders'));
-  const mergedBorders = { ...defaultBorders, ...borders };
+  // Cell-level borders only; table-level defaults are applied after the grid is built.
+  const borders = parseCellBorders(child(tcPr, 'tcBorders'));
+  const cellPaddingPx = parseMarginSet(child(tcPr, 'tcMar')) ?? defaultCellPadding;
 
   const vAlignEl = child(tcPr, 'vAlign');
   const vAlignVal = attr(vAlignEl, 'w:val') ?? attr(vAlignEl, 'val');
@@ -147,8 +204,9 @@ function parseRawCell(
       fill,
       rowSpan: 1,
       colSpan,
-      borders: mergedBorders as DocxTableCell['borders'],
+      borders,
       vAlign: vAlign as 'top' | 'center' | 'bottom',
+      cellPaddingPx,
     },
     vMerge,
     vMergeRestart,
@@ -164,26 +222,60 @@ function parseCellFill(tcPr: XmlNode | undefined): Fill {
   return { type: 'solid', color: { hex: fill.toUpperCase() } };
 }
 
-function parseBorderSet(
+// ─── Border helpers ────────────────────────────────────────────────────────────
+
+function parseBorderStroke(sideEl: XmlNode | undefined): Stroke | undefined {
+  if (!sideEl) return undefined;
+  const val = attr(sideEl, 'w:val') ?? attr(sideEl, 'val');
+  if (!val || val === 'none' || val === 'nil') return undefined;
+  const sz = attrNum(sideEl, 'w:sz') ?? attrNum(sideEl, 'sz') ?? 4;
+  const colorHex = attr(sideEl, 'w:color') ?? attr(sideEl, 'color');
+  const hex = colorHex && colorHex !== 'auto' ? colorHex.toUpperCase() : '000000';
+  return { color: { hex }, width: borderSzToPx(sz) };
+}
+
+function parseCellBorders(
   bordersEl: XmlNode | undefined,
 ): Partial<Record<'l' | 't' | 'r' | 'b', Stroke>> {
   if (!bordersEl) return {};
   const out: Partial<Record<'l' | 't' | 'r' | 'b', Stroke>> = {};
-  const sides: Array<[string, 'l' | 't' | 'r' | 'b']> = [
-    ['left', 'l'],
-    ['top', 't'],
-    ['right', 'r'],
-    ['bottom', 'b'],
-  ];
-  for (const [tag, key] of sides) {
-    const sideEl = child(bordersEl, tag);
-    if (!sideEl) continue;
-    const val = attr(sideEl, 'w:val') ?? attr(sideEl, 'val');
-    if (!val || val === 'none' || val === 'nil') continue;
-    const sz = attrNum(sideEl, 'w:sz') ?? attrNum(sideEl, 'sz') ?? 4;
-    const colorHex = attr(sideEl, 'w:color') ?? attr(sideEl, 'color');
-    const hex = colorHex && colorHex !== 'auto' ? colorHex.toUpperCase() : '000000';
-    out[key] = { color: { hex }, width: borderSzToPx(sz) };
+  for (const [tag, key] of [['left', 'l'], ['top', 't'], ['right', 'r'], ['bottom', 'b']] as const) {
+    const stroke = parseBorderStroke(child(bordersEl, tag));
+    if (stroke) out[key] = stroke;
   }
   return out;
+}
+
+function parseTableBorders(bordersEl: XmlNode | undefined): TableBorderDef {
+  if (!bordersEl) return { outer: {} };
+  return {
+    outer: parseCellBorders(bordersEl),
+    insideH: parseBorderStroke(child(bordersEl, 'insideH')),
+    insideV: parseBorderStroke(child(bordersEl, 'insideV')),
+  };
+}
+
+// ─── Margin helpers ────────────────────────────────────────────────────────────
+
+function parseMarginSet(
+  marginEl: XmlNode | undefined,
+): { top: number; right: number; bottom: number; left: number } | undefined {
+  if (!marginEl) return undefined;
+  let hasAny = false;
+
+  function get(tag: string): number {
+    const el = child(marginEl!, tag);
+    if (!el) return 0;
+    const type = attr(el, 'w:type') ?? attr(el, 'type');
+    if (type === 'nil') { hasAny = true; return 0; }
+    const w = attrNum(el, 'w:w') ?? attrNum(el, 'w') ?? 0;
+    hasAny = true;
+    return type === 'dxa' ? twipsToPx(w) : w;
+  }
+
+  const top = get('top');
+  const right = get('right');
+  const bottom = get('bottom');
+  const left = get('left');
+  return hasAny ? { top, right, bottom, left } : undefined;
 }

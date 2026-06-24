@@ -16,8 +16,8 @@ export function parseDrawing(
   drawingEl: XmlNode,
   resolveImage: (relId: string) => string | undefined,
 ): DocxInlineImage | null {
-  // Support inline only; skip anchor (floating) images.
-  const inline = child(drawingEl, 'inline');
+  // Support both inline (<wp:inline>) and floating/anchored (<wp:anchor>) images.
+  const inline = child(drawingEl, 'inline') ?? child(drawingEl, 'anchor');
   if (!inline) return null;
 
   const extent = child(inline, 'extent');
