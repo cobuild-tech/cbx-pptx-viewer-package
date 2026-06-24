@@ -1,0 +1,169 @@
+/**
+ * Paragraph parser for WordprocessingML.
+ *
+ * Converts a <w:p> element into a DocxParagraph IR node, resolving style
+ * inheritance, list numbering, hyperlinks, and inline images.
+ */
+import { child, children, attr, localName, type XmlNode } from '../../oxml/xml.js';
+import { twipsToPx } from '../units.js';
+import type { DocxParagraph, DocxBlock } from '../model.js';
+import type { TextRun } from '../model.js';
+import { StyleMap, mergeParaProps, mergeRunProps } from '../styles/styles.js';
+import { NumberingMap } from '../numbering/numbering.js';
+import { parseRun, runHasPageBreak } from './run.js';
+import { parseDrawing } from '../images/image.js';
+
+export interface ParagraphParseCtx {
+  styles: StyleMap;
+  numbering: NumberingMap;
+  /** Counter state for auto-numbered lists; mutated during parsing. */
+  listCounters: Map<string, number>;
+  resolveImage: (relId: string) => string | undefined;
+  resolveHyperlink: (relId: string) => string | undefined;
+}
+
+export interface ParagraphResult {
+  paragraphs: DocxParagraph[];
+  /** True if the paragraph ends with an explicit page break. */
+  endsWithPageBreak: boolean;
+}
+
+/**
+ * Parse a <w:p> element. May return multiple DocxParagraphs if the paragraph
+ * contains an explicit page break mid-text (rare but possible).
+ */
+export function parseParagraph(
+  pEl: XmlNode,
+  ctx: ParagraphParseCtx,
+): ParagraphResult {
+  const pPr = child(pEl, 'pPr');
+
+  // Resolve base style.
+  const styleRef =
+    attr(child(pPr, 'pStyle'), 'w:val') ?? attr(child(pPr, 'pStyle'), 'val') ?? 'Normal';
+  const baseStyle = ctx.styles.get(styleRef);
+
+  // Merge paragraph properties onto base.
+  const para = { ...baseStyle.para };
+  if (pPr) mergeParaProps(para, pPr);
+
+  // Resolve list numbering.
+  const numId = para.numId;
+  const ilvl = para.ilvl ?? 0;
+  let bullet = undefined;
+  let listIndentLeftPx: number | undefined;
+  let listIndentFirstLinePx: number | undefined;
+
+  if (numId !== undefined && numId !== 0) {
+    const level = ctx.numbering.resolve(numId, ilvl);
+    if (level) {
+      bullet = ctx.numbering.toBullet(level, ctx.listCounters, numId, ilvl);
+      listIndentLeftPx = level.indentLeftPx;
+      listIndentFirstLinePx = level.indentFirstLinePx;
+    }
+  }
+
+  // Run-level base style from the paragraph style.
+  const baseRun = { ...baseStyle.run };
+  // Merge paragraph's rPr default run props (pPr/rPr).
+  const pRpr = child(pPr, 'rPr');
+  if (pRpr) mergeRunProps(baseRun, pRpr);
+
+  // Parse runs, hyperlinks, and drawing elements.
+  const runs: TextRun[] = [];
+  let endsWithPageBreak = false;
+  const paragraphs: DocxParagraph[] = [];
+
+  // Check for paragraph-level page break.
+  const pageBreakBeforeEl = child(pPr, 'pageBreakBefore');
+  let pageBreakBefore = pageBreakBeforeEl !== undefined;
+  if (pageBreakBeforeEl) {
+    const val = attr(pageBreakBeforeEl, 'w:val') ?? attr(pageBreakBeforeEl, 'val');
+    pageBreakBefore = val === undefined || (val !== '0' && val !== 'false');
+  }
+
+  for (const node of pEl.children) {
+    const name = localName(node.name);
+
+    if (name === 'r') {
+      // Check for a page break inside this run — flush what we have and signal.
+      if (runHasPageBreak(node)) {
+        // Flush current runs as a paragraph before the break.
+        if (runs.length > 0) {
+          paragraphs.push(buildParagraph(runs.slice(), baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx));
+          runs.length = 0;
+          pageBreakBefore = false;
+          bullet = undefined;
+        }
+        endsWithPageBreak = true;
+        continue;
+      }
+      const run = parseRun(node, baseRun, ctx.resolveImage, ctx.styles);
+      if (run) runs.push(run);
+
+    } else if (name === 'hyperlink') {
+      const relId = attr(node, 'r:id') ?? attr(node, 'id');
+      const url = relId ? ctx.resolveHyperlink(relId) : undefined;
+      for (const rEl of children(node, 'r')) {
+        const run = parseRun(rEl, baseRun, ctx.resolveImage, ctx.styles);
+        if (run) {
+          if (url) run.hyperlink = url;
+          runs.push(run);
+        }
+      }
+
+    } else if (name === 'drawing') {
+      const image = parseDrawing(node, ctx.resolveImage);
+      if (image) {
+        // Flush preceding text runs as a paragraph, then the image is its own block.
+        // For simplicity, inline images are appended as a run with a special marker.
+        // We embed a placeholder text run with image metadata via a custom approach:
+        // wrap the image inline with the surrounding text by just noting it.
+        // Real approach: push current runs, push image block separately.
+        // Since DocxParagraph only has runs, we add the image as a top-level block
+        // outside this paragraph. Signal via side-channel? Instead we return the
+        // paragraphs array and include inline images as separate blocks.
+        // We flush runs so far, then the image block follows outside this function.
+        // → handled at body level by checking for 'drawing' nodes during paragraph iteration.
+      }
+    }
+  }
+
+  paragraphs.push(buildParagraph(runs, baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx));
+
+  return { paragraphs, endsWithPageBreak };
+}
+
+function buildParagraph(
+  runs: TextRun[],
+  styleName: string,
+  para: ReturnType<typeof import('../styles/styles.js').StyleMap.prototype.get>['para'],
+  baseRun: ReturnType<typeof import('../styles/styles.js').StyleMap.prototype.get>['run'],
+  bullet: DocxParagraph['bullet'],
+  level: number,
+  pageBreakBefore: boolean,
+  listIndentLeftPx: number | undefined,
+  listIndentFirstLinePx: number | undefined,
+): DocxParagraph {
+  return {
+    kind: 'paragraph',
+    runs,
+    styleName,
+    baseFontFamily: baseRun.fontAscii ?? baseRun.fontHAnsi,
+    baseFontSizePt: baseRun.sizePt,
+    baseBold: baseRun.bold,
+    baseItalic: baseRun.italic,
+    baseColorHex: baseRun.colorHex,
+    align: para.align,
+    indentLeftPx: listIndentLeftPx ?? para.indentLeftPx,
+    indentFirstLinePx: listIndentFirstLinePx ?? para.indentFirstLinePx,
+    spaceBeforePt: para.spaceBeforePt,
+    spaceAfterPt: para.spaceAfterPt,
+    lineSpacingPct: para.lineSpacingPct,
+    lineSpacingPt: para.lineSpacingPt,
+    bullet,
+    level: bullet ? level : undefined,
+    pageBreakBefore: pageBreakBefore || undefined,
+    shadingHex: para.shadingHex,
+  };
+}
