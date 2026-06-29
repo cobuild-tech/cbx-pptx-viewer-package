@@ -31,7 +31,12 @@ const DEFAULT_CLR_MAP: Record<string, string> = {
   folHlink: 'folHlink',
 };
 
-export function buildSlide(pkg: OpcPackage, slidePart: string, index: number): Slide {
+export function buildSlide(
+  pkg: OpcPackage,
+  slidePart: string,
+  index: number,
+  defaultTextStyle?: XmlNode,
+): Slide {
   const slideXml = pkg.getXml(slidePart);
   const layoutPart = pkg.relByType(slidePart, RelType.SlideLayout)?.target;
   const layoutXml = layoutPart ? pkg.getXml(layoutPart) : undefined;
@@ -70,6 +75,7 @@ export function buildSlide(pkg: OpcPackage, slidePart: string, index: number): S
   };
   const masterTxStyles = child(masterXml, 'txStyles');
   if (masterTxStyles) ctx.masterTxStyles = masterTxStyles;
+  if (defaultTextStyle) ctx.defaultTextStyle = defaultTextStyle;
 
   const background = resolveBackground(
     { xml: slideXml, scope: scopes.slide },
