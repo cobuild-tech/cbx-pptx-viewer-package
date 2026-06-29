@@ -11,6 +11,16 @@ import { ptToPx } from '../../oxml/units.js';
 import { colorToCss } from '../color.js';
 import type { RenderDeps } from '../render/primitives.js';
 
+/**
+ * PowerPoint's "single" (100%) line spacing is ~1.2x the font size — it derives
+ * line height from the font's ascent+descent but ignores the font's full
+ * line-gap. CSS `line-height: normal` does NOT: it's font-dependent and looser
+ * for fonts like Open Sans (~1.36), which makes text overflow its box. So we
+ * never leave line-height at `normal`; percentage spacing (spcPct) is taken
+ * relative to this baseline, and the implicit default is single spacing.
+ */
+const SINGLE_LINE_HEIGHT = 1.2;
+
 export function renderTextBody(body: TextBody, _deps: RenderDeps, flow = false): HTMLDivElement {
   const box = document.createElement('div');
   box.style.boxSizing = 'border-box';
@@ -58,8 +68,24 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
   }
   if (para.spaceBeforePt !== undefined) p.style.marginTop = `${ptToPx(para.spaceBeforePt)}px`;
   if (para.spaceAfterPt !== undefined) p.style.marginBottom = `${ptToPx(para.spaceAfterPt)}px`;
-  if (para.lineSpacingPct !== undefined) p.style.lineHeight = `${para.lineSpacingPct}`;
-  else if (para.lineSpacingPt !== undefined) p.style.lineHeight = `${ptToPx(para.lineSpacingPt)}px`;
+  // Anchor the line-box "strut" to the paragraph's own text size. Without this
+  // the block inherits the ambient (browser default ~16px) font size, so a
+  // unitless line-height inflates every line beyond the actual text height and
+  // the paragraph overflows its box. Empty paragraphs also need this for height.
+  if (para.defaultSizePt !== undefined) {
+    const sz = body.fontScale ? para.defaultSizePt * body.fontScale : para.defaultSizePt;
+    p.style.fontSize = `${ptToPx(sz)}px`;
+  }
+  if (para.lineSpacingPt !== undefined) {
+    // Exact point line spacing: an absolute height, unaffected by autofit reduction.
+    p.style.lineHeight = `${ptToPx(para.lineSpacingPt)}px`;
+  } else {
+    // Percentage spacing (default 100%), less any autofit line-spacing reduction,
+    // measured against PowerPoint's single-spacing baseline (~1.2x font size).
+    const pct = para.lineSpacingPct ?? 1;
+    const reduced = Math.max(0, pct - (body.lnSpcReductionPct ?? 0));
+    p.style.lineHeight = `${reduced * SINGLE_LINE_HEIGHT}`;
+  }
 
   const marL = para.marginLeftPx ?? 0;
   const indent = para.indentPx ?? 0;
