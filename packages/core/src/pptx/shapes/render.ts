@@ -126,8 +126,12 @@ function strokeOverlay(
   evenodd = false,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('width', `${w}`);
-  svg.setAttribute('height', `${h}`);
+  // A straight horizontal/vertical line has a zero-area box (e.g. 94×0). A
+  // zero-dimension <svg> isn't painted by the browser even with overflow
+  // visible, so the line vanishes — clamp the viewport to a minimum. The path
+  // coordinates are unchanged, so the stroke stays centered on the box edge.
+  svg.setAttribute('width', `${Math.max(w, 1)}`);
+  svg.setAttribute('height', `${Math.max(h, 1)}`);
   svg.style.position = 'absolute';
   svg.style.inset = '0';
   svg.style.overflow = 'visible';
@@ -275,8 +279,9 @@ function customGeomSvg(
   deps: RenderDeps,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('width', `${w}`);
-  svg.setAttribute('height', `${h}`);
+  // Clamp the viewport so a zero-area box (a straight custom line) still paints.
+  svg.setAttribute('width', `${Math.max(w, 1)}`);
+  svg.setAttribute('height', `${Math.max(h, 1)}`);
   svg.setAttribute('viewBox', `0 0 ${pw || w} ${ph || h}`);
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.style.position = 'absolute';
