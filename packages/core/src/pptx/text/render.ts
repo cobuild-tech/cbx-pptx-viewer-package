@@ -56,31 +56,31 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
     p.style.textAlign =
       para.align === 'ctr' ? 'center' : para.align === 'r' ? 'right' : para.align === 'just' ? 'justify' : 'left';
   }
-  if (para.marginLeftPx !== undefined) p.style.marginLeft = `${para.marginLeftPx}px`;
-  if (para.indentPx !== undefined) {
-    // A hanging indent (negative `indent`) makes room left of `marL` for a
-    // bullet. PowerPoint never renders the first line left of the paragraph's
-    // own left edge, so clamp it — otherwise a marL=0/negative-indent paragraph
-    // (e.g. a tab-stop "hang" with no bullet) spills out and clips its start.
-    const ml = para.marginLeftPx ?? 0;
-    p.style.textIndent = `${Math.max(para.indentPx, -ml)}px`;
-  }
   if (para.spaceBeforePt !== undefined) p.style.marginTop = `${ptToPx(para.spaceBeforePt)}px`;
   if (para.spaceAfterPt !== undefined) p.style.marginBottom = `${ptToPx(para.spaceAfterPt)}px`;
   if (para.lineSpacingPct !== undefined) p.style.lineHeight = `${para.lineSpacingPct}`;
   else if (para.lineSpacingPt !== undefined) p.style.lineHeight = `${ptToPx(para.lineSpacingPt)}px`;
 
+  const marL = para.marginLeftPx ?? 0;
+  const indent = para.indentPx ?? 0;
   const bulletStr = bulletText(para.bullet, para.level, counters);
-  if (bulletStr) {
-    const b = document.createElement('span');
-    b.textContent = bulletStr + ' ';
-    if (para.bullet && 'color' in para.bullet && para.bullet.color) {
-      b.style.color = colorToCss(para.bullet.color);
-    }
-    if (para.bullet && para.bullet.type === 'char' && para.bullet.font) {
-      b.style.fontFamily = para.bullet.font;
-    }
+
+  if (bulletStr && indent < 0) {
+    // Hanging-indent bullet: the bullet occupies a fixed-width gutter (-indent)
+    // and the text — including wrapped lines — aligns at marL, so the bullet
+    // glyph's own width never shifts the text. Matches PowerPoint's layout,
+    // where a tab after the bullet snaps the text to marL.
+    p.style.marginLeft = `${marL}px`;
+    const b = bulletSpan(bulletStr, para.bullet);
+    b.style.display = 'inline-block';
+    b.style.width = `${-indent}px`;
+    b.style.marginLeft = `${indent}px`;
     p.appendChild(b);
+  } else {
+    if (para.marginLeftPx !== undefined) p.style.marginLeft = `${marL}px`;
+    // Clamp so the first line never starts left of the paragraph's own edge.
+    if (para.indentPx !== undefined) p.style.textIndent = `${Math.max(indent, -marL)}px`;
+    if (bulletStr) p.appendChild(bulletSpan(bulletStr + ' ', para.bullet));
   }
 
   if (para.runs.length === 0) {
@@ -91,6 +91,14 @@ function renderParagraph(para: Paragraph, body: TextBody, counters: number[]): H
     p.appendChild(renderRun(run, body.fontScale));
   }
   return p;
+}
+
+function bulletSpan(text: string, bullet: Bullet | undefined): HTMLSpanElement {
+  const b = document.createElement('span');
+  b.textContent = text;
+  if (bullet && 'color' in bullet && bullet.color) b.style.color = colorToCss(bullet.color);
+  if (bullet && bullet.type === 'char' && bullet.font) b.style.fontFamily = bullet.font;
+  return b;
 }
 
 function bulletText(bullet: Bullet | undefined, level: number, counters: number[]): string {
@@ -112,7 +120,6 @@ function bulletText(bullet: Bullet | undefined, level: number, counters: number[
 function renderRun(run: TextRun, fontScale: number | undefined): HTMLElement {
   const span = document.createElement('span');
   span.textContent = run.text;
-  if (run.bold) span.style.fontWeight = 'bold';
   if (run.italic) span.style.fontStyle = 'italic';
   const decorations: string[] = [];
   if (run.underline) decorations.push('underline');
@@ -123,7 +130,15 @@ function renderRun(run: TextRun, fontScale: number | undefined): HTMLElement {
     span.style.fontSize = `${ptToPx(pt)}px`;
   }
   if (run.color) span.style.color = colorToCss(run.color);
-  if (run.font) span.style.fontFamily = `"${run.font}", Arial, Helvetica, sans-serif`;
+  // A weight-suffixed family ("Open Sans Light") is the base family at a CSS
+  // weight, not a distinct family name — split it so the base webfont applies.
+  let weight = run.bold ? 700 : undefined;
+  if (run.font) {
+    const { family, weight: w } = splitFontWeight(run.font);
+    span.style.fontFamily = `"${family}", Arial, Helvetica, sans-serif`;
+    if (w !== undefined && !run.bold) weight = w;
+  }
+  if (weight !== undefined) span.style.fontWeight = String(weight);
   if (run.highlight) span.style.backgroundColor = colorToCss(run.highlight);
   if (run.letterSpacingPt) span.style.letterSpacing = `${ptToPx(run.letterSpacingPt)}px`;
   if (run.caps === 'all') span.style.textTransform = 'uppercase';
@@ -143,4 +158,31 @@ function renderRun(run: TextRun, fontScale: number | undefined): HTMLElement {
     return a;
   }
   return span;
+}
+
+/** Trailing weight words PowerPoint bakes into a family name (longest first). */
+const WEIGHT_SUFFIXES: Array<[RegExp, number]> = [
+  [/\s+(extra\s?light|ultra\s?light)$/i, 200],
+  [/\s+(semi\s?bold|demi\s?bold)$/i, 600],
+  [/\s+(extra\s?bold|ultra\s?bold)$/i, 800],
+  [/\s+(thin|hairline)$/i, 100],
+  [/\s+light$/i, 300],
+  [/\s+medium$/i, 500],
+  [/\s+(black|heavy)$/i, 900],
+  [/\s+(bold)$/i, 700],
+  [/\s+(regular|normal|book)$/i, 400],
+];
+
+/**
+ * Split a typeface name like "Open Sans Light" into the base family and a CSS
+ * weight. PowerPoint treats weight variants as distinct families, but the web
+ * exposes them as one family at different `font-weight`s — so normalizing lets a
+ * single loaded webfont (e.g. "Open Sans") cover Light/Semibold/etc.
+ */
+export function splitFontWeight(font: string): { family: string; weight?: number } {
+  const name = font.trim();
+  for (const [re, weight] of WEIGHT_SUFFIXES) {
+    if (re.test(name)) return { family: name.replace(re, '').trim(), weight };
+  }
+  return { family: name };
 }

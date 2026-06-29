@@ -17,7 +17,7 @@ import type {
   LineEndType,
 } from '../model.js';
 import { colorToCss } from '../color.js';
-import { presetPath, OPEN_PRESETS } from './geometry/presets.js';
+import { presetPath, OPEN_PRESETS, EVENODD_PRESETS } from './geometry/presets.js';
 import { SVG_NS, positioned, applyFillBackground, type RenderDeps } from '../render/primitives.js';
 import { renderTextBody } from '../text/render.js';
 import { applyEffects } from '../effects/render.js';
@@ -36,10 +36,16 @@ export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement 
       fillLayer.style.position = 'absolute';
       fillLayer.style.inset = '0';
       applyFillBackground(fillLayer, shape.fill, deps);
-      if (shape.geom.preset !== 'rect') fillLayer.style.clipPath = `path('${d}')`;
+      if (shape.geom.preset !== 'rect') {
+        fillLayer.style.clipPath = EVENODD_PRESETS.has(shape.geom.preset)
+          ? `path('evenodd', '${d}')`
+          : `path('${d}')`;
+      }
       el.appendChild(fillLayer);
     }
-    if (shape.stroke) el.appendChild(strokeOverlay(d, w, h, shape.stroke, false));
+    if (shape.stroke) {
+      el.appendChild(strokeOverlay(d, w, h, shape.stroke, false, EVENODD_PRESETS.has(shape.geom.preset)));
+    }
   } else {
     // Custom geometry: render each subpath in a scaled SVG.
     for (const p of shape.geom.paths) {
@@ -47,7 +53,22 @@ export function renderPreset(shape: PresetShape, deps: RenderDeps): HTMLElement 
     }
   }
 
-  if (shape.text) el.appendChild(renderTextBody(shape.text, deps));
+  if (shape.text) {
+    if (shape.textBox && shape.transform) {
+      // Place the label in its own rectangle (SmartArt txXfrm) instead of
+      // filling the shape — the text body fills this wrapper minus its insets.
+      const wrap = document.createElement('div');
+      wrap.style.position = 'absolute';
+      wrap.style.left = `${shape.textBox.x - shape.transform.x}px`;
+      wrap.style.top = `${shape.textBox.y - shape.transform.y}px`;
+      wrap.style.width = `${shape.textBox.w}px`;
+      wrap.style.height = `${shape.textBox.h}px`;
+      wrap.appendChild(renderTextBody(shape.text, deps));
+      el.appendChild(wrap);
+    } else {
+      el.appendChild(renderTextBody(shape.text, deps));
+    }
+  }
   applyEffects(el, shape.effects);
   return el;
 }
@@ -102,6 +123,7 @@ function strokeOverlay(
   h: number,
   stroke: Stroke,
   fill: boolean,
+  evenodd = false,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
   svg.setAttribute('width', `${w}`);
@@ -111,6 +133,7 @@ function strokeOverlay(
   svg.style.overflow = 'visible';
   const path = document.createElementNS(SVG_NS, 'path');
   path.setAttribute('d', d);
+  if (evenodd) path.setAttribute('fill-rule', 'evenodd');
   path.setAttribute('fill', fill ? colorToCss(stroke.color) : 'none');
   if (!fill) {
     path.setAttribute('stroke', colorToCss(stroke.color));
