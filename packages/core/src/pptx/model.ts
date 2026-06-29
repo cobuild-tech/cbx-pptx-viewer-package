@@ -116,6 +116,13 @@ export interface Paragraph {
   lineSpacingPt?: number;
   spaceBeforePt?: number;
   spaceAfterPt?: number;
+  /**
+   * Font size (pt) governing the paragraph's line height — the size of the
+   * paragraph mark (endParaRPr). Used to set the block's line-box "strut" so
+   * line spacing matches the text rather than the inherited default font size,
+   * and to give empty lines their correct height.
+   */
+  defaultSizePt?: number;
 }
 
 export interface TextBody {

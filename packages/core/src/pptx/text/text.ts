@@ -89,7 +89,18 @@ function parseParagraph(
     }
   }
 
+  // The line-box height is governed by the paragraph's text size. Use the
+  // largest run when there is text; for an empty paragraph fall back to the
+  // paragraph mark (endParaRPr), which is what gives a blank line its height.
+  // (Avoid mixing endParaRPr into the run max: when it's absent runProps yields
+  // the 18pt default, which would wrongly inflate small body text.)
+  const runSizes = runs.map((r) => r.sizePt).filter((s): s is number => s !== undefined);
+  const defaultSizePt = runSizes.length
+    ? Math.max(...runSizes)
+    : chain.runProps(level, child(p, 'endParaRPr')).sizePt;
+
   const result: Paragraph = { runs, level };
+  if (defaultSizePt !== undefined && defaultSizePt > 0) result.defaultSizePt = defaultSizePt;
   if (para.align) result.align = para.align;
   if (para.bullet) result.bullet = para.bullet;
   if (para.marginLeftPx !== undefined) result.marginLeftPx = para.marginLeftPx;
