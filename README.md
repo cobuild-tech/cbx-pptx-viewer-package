@@ -1,37 +1,45 @@
-# cbx-pptx-viewer-package
+# pptx-viewer-monorepo
 
-A frontend PowerPoint (`.pptx`) viewer — parse and render PowerPoint decks
-directly in the browser, instead of converting them to PDF or images first.
-Slides render to real HTML/CSS, so text is selectable, hyperlinks work, and the
-output is accessible.
+A frontend Office-document viewer — parse and render **PowerPoint (`.pptx`)**
+and **Word (`.docx`)** files directly in the browser, instead of converting them
+to PDF or images first. Documents render to real HTML/CSS, so text is
+selectable, hyperlinks work, and the output is accessible.
 
-> Status: **viewer works, read-only.** Editing is not yet implemented — see
-> [Roadmap](#roadmap).
+> Status: **viewers work, read-only.** Editing is not yet implemented — the
+> architecture is built to grow toward it. See [Roadmap](#roadmap) and
+> [Extending the package](#extending-the-package).
 
 ## Why
 
-Converting `.pptx` → PDF loses interactivity, needs a server-side tool
+Converting Office files → PDF loses interactivity, needs a server-side tool
 (LibreOffice/Office), and degrades fidelity. This project parses the Office Open
-XML directly in the browser and renders each slide, resolving the same
-layout/master/theme inheritance chain PowerPoint uses.
+XML directly in the browser and renders each slide/page, resolving the same
+layout/master/theme and style-inheritance chains the desktop apps use.
 
 ## How it works
 
-A `.pptx` is a ZIP of XML parts (the OPC package). The pipeline is four stages:
+Both `.pptx` and `.docx` are ZIP packages of XML parts (the OPC package). Each
+format runs the same shape of pipeline over a shared low-level layer:
 
 ```
-read (OPC)  ->  parse (XML -> model)  ->  resolve (inheritance)  ->  render (DOM)
+PPTX:  read (OPC)  ->  parse (XML -> model)  ->  resolve (inheritance)  ->  render (DOM)
+DOCX:  read (OPC)  ->  parse (XML -> model)  ->  paginate (sections)    ->  render (DOM)
 ```
 
-- **read** — unzip the package, resolve content types and relationships
-- **parse** — turn slide/layout/master/theme XML into a render-agnostic model
-- **resolve** — the accuracy core: every slide inherits geometry, colors, fonts,
-  and text styles from its layout → master → theme. Scheme colors are mapped
-  through the master's color map and transformed (lumMod/tint/shade/alpha).
-- **render** — emit absolutely-positioned HTML/CSS; the viewer scales the whole
-  slide to fit the viewport
+- **read** — unzip the package, resolve content types and relationships (shared
+  `oxml/` layer)
+- **parse** — turn the format's XML parts into a render-agnostic model
+- **resolve / paginate** — the accuracy core.
+  - *PPTX*: every slide inherits geometry, colors, fonts, and text styles from
+    its layout → master → theme. Scheme colors are mapped through the master's
+    color map and transformed (lumMod/lumOff/tint/shade/alpha).
+  - *DOCX*: styles cascade (run → paragraph → linked → docDefaults), then blocks
+    are measured off-screen and flowed into pages by section page-size/margins.
+- **render** — emit HTML/CSS/SVG. PPTX positions shapes absolutely and scales
+  the whole slide to fit; DOCX flows pages in a scrollable stack.
 
-All geometry is converted from EMU (914,400 per inch) to CSS pixels at 96 DPI.
+All geometry is converted from EMU (914,400 per inch) to CSS pixels at 96 DPI
+via the shared `oxml/units` helpers.
 
 ## Repository layout
 
@@ -39,26 +47,58 @@ This is an npm-workspaces monorepo:
 
 ```
 packages/
-  core/     @pptx-viewer/core  — framework-agnostic parser + DOM renderer
-  react/    @pptx-viewer/react — <PptxViewer /> component + useDeck() hook
-app/        React app: upload a .pptx and view it (the main demo)
+  core/     @pptx-viewer/core  — framework-agnostic parsers + DOM renderers
+  react/    @pptx-viewer/react — <PptxViewer /> + <DocxViewer /> components & hooks
+app/        React app: upload a .pptx/.docx and view it (the main demo)
 demo/       Vanilla-TS inspector: dumps a package's parts/content-types
 ```
 
 ### `@pptx-viewer/core`
 
-The engine. Key modules in [`packages/core/src`](packages/core/src):
+The engine, organized as a **shared low-level layer + per-format feature
+slices**. Each format is self-contained and must not import another format's
+code; only `oxml/` is shared. (See [memory](#extending-the-package): *docx is a
+sibling of pptx and must never import pptx*.)
 
-| Module | Responsibility |
+```
+packages/core/src/
+  index.ts          public API: loadPptx / loadDocx, viewers, low-level exports
+
+  oxml/             SHARED, format-agnostic
+    package.ts      OPC: unzip, content types, relationship resolution
+    xml.ts          order-preserving, namespace-aware XML tree + helpers
+    units.ts        EMU / point / twip -> CSS pixel conversions
+
+  pptx/             PowerPoint feature slices
+    deck/           top-level loader; presentation + slide/layout/master/theme
+    slides/         slide composition (master -> layout -> slide)
+    shapes/         fills, geometry, placeholders, shape props/render
+    text/           text bodies, runs, text-style inheritance
+    tables/  charts/  diagrams/ (SmartArt)  pictures/  effects/
+    color.ts        scheme-color map + modifier transforms
+    model.ts        render-agnostic intermediate representation
+    render/         model -> HTML/CSS/SVG (dom.ts), font install, primitives
+    viewer/         navigation, fit-to-viewport scaling, keyboard
+
+  docx/             Word feature slices (same shape as pptx)
+    document/       top-level loader; body parsing
+    paragraphs/     paragraphs + runs
+    styles/  numbering/  tables/  images/
+    model.ts        DOCX page/block/paragraph/table model
+    render/         model -> HTML/CSS (dom.ts), pagination-aware
+    viewer/         paginated scroll view + thumbnail strip
+```
+
+### `@pptx-viewer/react`
+
+Thin React wrappers over the core viewers:
+
+| Export | What it is |
 | --- | --- |
-| `opc/` | Unzip, content types, relationship resolution |
-| `xml.ts` | Order-preserving, namespace-aware XML tree + helpers |
-| `model.ts` | The render-agnostic intermediate representation |
-| `resolve/` | Color, fill/stroke, placeholder & text-style inheritance |
-| `geometry/` | Preset & custom geometry → SVG paths |
-| `parse/` | Presentation, text bodies, tables, and the top-level deck loader |
-| `render/dom.ts` | Model → HTML/CSS/SVG elements |
-| `viewer/` | Navigation, fit-to-viewport scaling, keyboard |
+| `<PptxViewer />` | mounts the PPTX viewer; `next()`/`prev()`/`goTo()` via ref |
+| `useDeck()` | load a `.pptx` source into deck state |
+| `<DocxViewer />` | mounts the DOCX viewer; same ref controls |
+| `useDocument()` | load a `.docx` source into document state |
 
 ## Usage
 
@@ -66,48 +106,54 @@ The engine. Key modules in [`packages/core/src`](packages/core/src):
 
 ```tsx
 import { useState } from 'react';
-import { PptxViewer } from '@pptx-viewer/react';
+import { PptxViewer, DocxViewer } from '@pptx-viewer/react';
 
 function App() {
   const [file, setFile] = useState<File | null>(null);
+  const isDocx = file?.name.toLowerCase().endsWith('.docx');
   return (
     <>
-      <input type="file" accept=".pptx"
+      <input type="file" accept=".pptx,.docx"
         onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
-      {file && <PptxViewer src={file} />}
+      {file && (isDocx ? <DocxViewer src={file} /> : <PptxViewer src={file} />)}
     </>
   );
 }
 ```
 
-`src` accepts a `File`, `ArrayBuffer`, or `Uint8Array`. By default the viewer
-**fits the whole slide to its container and centres it** — like PowerPoint's
-slideshow — scaling to the largest size that fits both the width and height. It
-shows a built-in prev/next toolbar (`toolbar={false}` to hide) and exposes
-`next()` / `prev()` / `goTo()` via a ref.
+`src` accepts a `File`, `ArrayBuffer`, or `Uint8Array`.
+
+- **`PptxViewer`** by default **fits the whole slide to its container and
+  centres it** — like PowerPoint's slideshow. It shows a built-in prev/next
+  toolbar (`toolbar={false}` to hide) and exposes `next()` / `prev()` /
+  `goTo()` via a ref.
+- **`DocxViewer`** flows pages in a vertical scroll stack with a thumbnail
+  strip, and exposes the same ref controls for page navigation.
 
 ### Framework-agnostic core
 
 ```ts
-import { loadPptx, createViewer } from '@pptx-viewer/core';
+import { loadPptx, createViewer, loadDocx, createDocxViewer } from '@pptx-viewer/core';
 
+// PPTX
 const deck = loadPptx(arrayBuffer);
 const viewer = createViewer(deck, document.getElementById('stage')!);
 viewer.next();
 viewer.goTo(3);
-
-// when done — frees the image object URLs
-viewer.destroy();
+viewer.destroy();   // frees image object URLs
 deck.dispose();
+
+// DOCX
+const doc = loadDocx(arrayBuffer);
+const docViewer = createDocxViewer(doc, document.getElementById('stage')!, { fit: 'width' });
+docViewer.goTo(2);
+docViewer.destroy();
+doc.dispose();
 ```
 
-Sizing defaults to `fit: 'contain'` (fit the whole slide to the container and
-centre it). Pass `fit: 'width'` for the embedded-document style that fills the
-width and lets the page scroll vertically:
-
-```ts
-createViewer(deck, stage, { fit: 'width' });
-```
+PPTX sizing defaults to `fit: 'contain'` (fit the whole slide and centre it).
+Pass `fit: 'width'` for the embedded-document style that fills the width and
+lets the page scroll vertically.
 
 ## Development
 
@@ -130,8 +176,8 @@ there's no build step while developing — edits to `core`/`react` hot-reload.
 
 ### Comparing renderers
 
-The React app has a **Renderer** dropdown so you can view the same uploaded
-`.pptx` through this package or three third-party libraries, to compare fidelity:
+The React app lets you upload a `.pptx`/`.docx` and (for `.pptx`) view the same
+file through this package or three third-party libraries, to compare fidelity:
 
 | Option | Package | Approach |
 | --- | --- | --- |
@@ -141,11 +187,13 @@ The React app has a **Renderer** dropdown so you can view the same uploaded
 | @cyntler/react-doc-viewer | [`@cyntler/react-doc-viewer`](https://www.npmjs.com/package/@cyntler/react-doc-viewer) | embeds the MS Office Online viewer |
 
 Each third-party renderer is lazy-loaded, so its bundle only downloads when
-selected. Note `@cyntler/react-doc-viewer` renders `.pptx` via the Office Online
-viewer, which needs a **publicly reachable URL** — a locally-uploaded file
-(blob URL) won't load there.
+selected. Note `@cyntler/react-doc-viewer` renders via the Office Online viewer,
+which needs a **publicly reachable URL** — a locally-uploaded file (blob URL)
+won't load there.
 
 ## What's supported
+
+### PPTX
 
 - Slides composited from **master → layout → slide** (logos, decorations,
   backgrounds inherited from layouts/masters)
@@ -156,33 +204,82 @@ viewer, which needs a **publicly reachable URL** — a locally-uploaded file
 - **Color**: theme scheme colors via the master color map, with
   lumMod/lumOff/tint/shade/alpha modifiers
 - **Fills**: solid, linear/radial gradient, image; **outlines** with dashes
-- **Shapes**: common preset geometries (rect, ellipse, rounded rect, triangle,
-  diamond, arrows, polygons…) + **custom geometry** paths
+- **Shapes**: ~106 preset geometries (rect, ellipse, rounded rect, triangle,
+  diamond, arrows, polygons, callouts…) + **custom geometry** paths
 - **Pictures**: with cropping and clipping to a non-rectangular shape
 - **Groups** with nested coordinate transforms; rotation / flip
 - **Tables**: grid, row/column spans, per-cell fill/borders/text
+- **Charts**: bar/line/area/scatter/pie/doughnut drawn as static SVG (the cached
+  snapshot PowerPoint shows when the workbook is detached)
+- **SmartArt / diagrams**: cached `dsp:drawing` fast path, plus a data-model
+  fallback that lays out nodes by layout family (cycle/process/list/hierarchy/
+  pyramid) so the real content shows instead of a placeholder
 - Navigation: prev/next/goto, keyboard, fit-to-viewport scaling
+
+### DOCX
+
+- Style cascade: run → paragraph → linked → docDefaults
+- Paragraphs and runs with character formatting; list numbering
+- Tables (grid, cell borders/fills/text)
+- Inline images
+- Section-aware **pagination** (page size + margins), scroll view + thumbnails
 
 ## Known limitations
 
-- **Read-only** — no editing yet
-- **Charts** and **SmartArt** render as a labeled placeholder (not drawn)
-- Only the common preset geometries are exact; the rest fall back to a rectangle
+- **Read-only** — no editing yet (the model is intentionally render-agnostic to
+  make round-trip editing tractable later)
+- PPTX: only the implemented preset geometries are exact; the rest fall back to
+  a rectangle
 - Image *fills* inside shapes don't yet apply `srcRect` cropping (standalone
   pictures do)
 - Effects (shadow / glow / reflection), slide transitions, and animations are
   not rendered
-- `.ppt` (legacy binary format) is out of scope — `.pptx` only
+- Charts render as a static snapshot, not an interactive chart
+- `.ppt` / `.doc` (legacy binary formats) are out of scope — the OOXML zip
+  formats only
 - `clip-path: path()` requires a modern evergreen browser
+
+## Extending the package
+
+The codebase is structured so new formats and, eventually, an editor slot in
+without rewrites. Conventions to follow:
+
+- **Shared vs. format code.** Anything format-agnostic (OPC packaging, XML
+  helpers, unit conversion) lives in `oxml/` and is the *only* shared layer.
+  Each format (`pptx/`, `docx/`) is a self-contained slice.
+- **Formats never import each other.** `docx/` must not import from `pptx/` and
+  vice-versa. If two formats need the same thing, lift it into `oxml/`.
+- **Adding a format** (e.g. `.xlsx`): add a sibling `src/<format>/` with its own
+  `model.ts`, `relTypes.ts`, parse slices, `render/dom.ts`, and `viewer/`,
+  mirroring the `pptx`/`docx` shape; reuse `oxml/` for read/units/xml; then
+  export `load<Format>` + `create<Format>Viewer` from `src/index.ts` and add a
+  React wrapper + hook in `packages/react/src/`.
+- **Render-agnostic model first.** Parsing produces a plain model; rendering is a
+  separate pass. Keep new features on that boundary — this is what makes an
+  editor (model edit → DOM re-render → XML round-trip) feasible.
+- **Fidelity is generic.** Fixes must work for any conformant file, never
+  special-cased to a particular deck.
+- **No PDF/LibreOffice step**, ever — render natively in the browser, including
+  for any reference/diff comparison.
+
+### Toward an editor
+
+The intended path: text-content editing with round-trip export back to the
+source XML (each model node keeps a link to its origin part), then shape
+move/resize/restyle. Because the model is already decoupled from both parsing
+and rendering, an editor becomes "mutate model → re-render → serialize," not a
+new pipeline.
 
 ## Roadmap
 
-- Editing: text-content editing with round-trip export to `.pptx` (tracked back
-  to the source XML), then shape move / resize / restyle
-- Charts via the chart part data; SmartArt via its fallback drawing
-- More preset geometries and effect mapping (CSS shadow / filter)
-- Thumbnail strip, speaker-notes panel, fullscreen
+- Editing: text-content editing with round-trip export, then shape
+  move / resize / restyle
+- More PPTX preset geometries and effect mapping (CSS shadow / filter)
+- `srcRect` cropping for image fills inside shapes
+- Speaker-notes panel, fullscreen
+- Richer DOCX coverage (headers/footers, footnotes, fields)
 - Optional visual-diff testing against reference renders
+- Further formats (e.g. `.xlsx`) as new sibling slices
 
 ## License
 
