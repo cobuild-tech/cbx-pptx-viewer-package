@@ -22,6 +22,7 @@ export { Deck, Deck as loadDeck } from './pptx/deck/deck.js';
 export { Viewer, createViewer, type ViewerOptions } from './pptx/viewer/viewer.js';
 export { renderSlide, type RenderDeps } from './pptx/render/dom.js';
 export { installDeckFonts, type FontInstallation } from './pptx/render/fonts.js';
+export { installWebFonts, collectFontFamilies, type WebFontOptions } from './pptx/render/webfonts.js';
 
 import { Deck } from './pptx/deck/deck.js';
 /** Load a .pptx from raw bytes into a renderable {@link Deck}. */
