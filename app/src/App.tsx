@@ -1,16 +1,16 @@
 import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
-import { PptxViewer } from '@pptx-viewer/react';
-import { DocxViewer } from '@pptx-viewer/react';
+import { PptxViewer, DocxViewer, PdfViewer } from '@pptx-viewer/react';
 
 const PptxReactViewerWrap = lazy(() => import('./renderers/PptxReactViewerWrap'));
 const PptxViewJsWrap = lazy(() => import('./renderers/PptxViewJsWrap'));
 const CyntlerViewerWrap = lazy(() => import('./renderers/CyntlerViewerWrap'));
 
-type FileType = 'pptx' | 'docx';
+type FileType = 'pptx' | 'docx' | 'pdf';
 type PptxRendererId = 'mine' | 'pptx-react-viewer' | 'pptxviewjs' | 'cyntler';
 type DocxRendererId = 'mine-docx';
-type RendererId = PptxRendererId | DocxRendererId;
+type PdfRendererId  = 'mine-pdf';
+type RendererId = PptxRendererId | DocxRendererId | PdfRendererId;
 
 const PPTX_RENDERERS: { id: PptxRendererId; label: string }[] = [
   { id: 'mine', label: 'cbx-ppt-viewer' },
@@ -21,6 +21,10 @@ const PPTX_RENDERERS: { id: PptxRendererId; label: string }[] = [
 
 const DOCX_RENDERERS: { id: DocxRendererId; label: string }[] = [
   { id: 'mine-docx', label: 'cbx-doc-viewer' },
+];
+
+const PDF_RENDERERS: { id: PdfRendererId; label: string }[] = [
+  { id: 'mine-pdf', label: 'cbx-pdf-viewer' },
 ];
 
 const FORMAT_META: Record<FileType, { ext: string; accept: string; icon: string; color: string; desc: string }> = {
@@ -38,12 +42,26 @@ const FORMAT_META: Record<FileType, { ext: string; accept: string; icon: string;
     color: '#2b579a',
     desc: 'Word Document',
   },
+  pdf: {
+    ext: '.pdf',
+    accept: '.pdf',
+    icon: '📕',
+    color: '#b71c1c',
+    desc: 'PDF Document',
+  },
+};
+
+const DEFAULT_RENDERER: Record<FileType, RendererId> = {
+  pptx: 'mine',
+  docx: 'mine-docx',
+  pdf:  'mine-pdf',
 };
 
 function getFileType(file: File): FileType | null {
   const name = file.name.toLowerCase();
   if (name.endsWith('.pptx')) return 'pptx';
   if (name.endsWith('.docx')) return 'docx';
+  if (name.endsWith('.pdf'))  return 'pdf';
   return null;
 }
 
@@ -60,13 +78,13 @@ export function App() {
     if (!type) return;
     setFile(f);
     setMode(type);
-    setRenderer(type === 'docx' ? 'mine-docx' : 'mine');
+    setRenderer(DEFAULT_RENDERER[type]);
   }, []);
 
   const switchMode = useCallback((next: FileType) => {
     setMode(next);
     setFile(null);
-    setRenderer(next === 'docx' ? 'mine-docx' : 'mine');
+    setRenderer(DEFAULT_RENDERER[next]);
   }, []);
 
   const onDrop = useCallback(
@@ -79,7 +97,10 @@ export function App() {
   );
 
   const meta = FORMAT_META[mode];
-  const renderers = mode === 'docx' ? DOCX_RENDERERS : PPTX_RENDERERS;
+  const renderers =
+    mode === 'docx' ? DOCX_RENDERERS :
+    mode === 'pdf'  ? PDF_RENDERERS  :
+    PPTX_RENDERERS;
 
   return (
     <div style={page}>
@@ -95,7 +116,7 @@ export function App() {
 
         {/* Format tabs */}
         <div style={tabGroup}>
-          {(['pptx', 'docx'] as FileType[]).map((fmt) => {
+          {(['pptx', 'docx', 'pdf'] as FileType[]).map((fmt) => {
             const m = FORMAT_META[fmt];
             const active = mode === fmt;
             return (
@@ -169,7 +190,7 @@ export function App() {
         <input
           ref={inputRef}
           type="file"
-          accept={meta.accept}
+          accept=".pptx,.docx,.pdf"
           style={{ display: 'none' }}
           onChange={(e) => accept(e.target.files?.[0])}
         />
@@ -197,13 +218,18 @@ export function App() {
             {mode === 'docx' && renderer === 'mine-docx' && (
               <DocxViewer key={`docx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
             )}
+
+            {/* PDF renderer */}
+            {mode === 'pdf' && renderer === 'mine-pdf' && (
+              <PdfViewer key={`pdf:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+            )}
           </Suspense>
         ) : (
           /* ── Drop zone ─────────────────────────────────────────────────── */
           <div style={dropWrapper}>
             {/* Inline format switcher */}
             <div style={inlineTabGroup}>
-              {(['pptx', 'docx'] as FileType[]).map((fmt) => {
+              {(['pptx', 'docx', 'pdf'] as FileType[]).map((fmt) => {
                 const m = FORMAT_META[fmt];
                 const active = mode === fmt;
                 return (
