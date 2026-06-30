@@ -109,8 +109,16 @@ export function renderGroup(shape: GroupShape, deps: RenderDeps): HTMLElement {
   const sy = co.h > 1 && shape.transform ? shape.transform.h / co.h : 1;
   inner.style.transform = `scale(${sx}, ${sy}) translate(${-co.x}px, ${-co.y}px)`;
 
+  // The CSS scale above squishes geometry (correct — PowerPoint stretches a
+  // group's shapes too) but also squishes glyphs (wrong). Pass the cumulative
+  // ancestor scale down so the text renderer can keep glyphs un-squished.
+  const cSx = (deps.groupScale?.sx ?? 1) * sx;
+  const cSy = (deps.groupScale?.sy ?? 1) * sy;
+  const childDeps: RenderDeps =
+    cSx !== 1 || cSy !== 1 ? { ...deps, groupScale: { sx: cSx, sy: cSy } } : deps;
+
   for (const childShape of shape.children) {
-    const childEl = renderShape(childShape, deps);
+    const childEl = renderShape(childShape, childDeps);
     if (childEl) inner.appendChild(childEl);
   }
   el.appendChild(inner);

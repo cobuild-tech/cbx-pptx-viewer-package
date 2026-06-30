@@ -14,6 +14,14 @@ export const SVG_NS = 'http://www.w3.org/2000/svg';
 export interface RenderDeps {
   /** Resolve a media part path to a displayable URL. */
   imageUrl(part: string): string | undefined;
+  /**
+   * Cumulative non-uniform scale of all ancestor groups, as a product of each
+   * group's (off/chExt) ratio. Geometry is squished by the ancestor CSS scale,
+   * but PowerPoint never squishes glyphs: text keeps its aspect ratio and just
+   * reflows in the scaled box (font follows the vertical scale). The text
+   * renderer reads this to counter the horizontal squish. Absent ⇒ no scaling.
+   */
+  groupScale?: { sx: number; sy: number };
 }
 
 /** Position + rotate/flip a shape container per its transform. */

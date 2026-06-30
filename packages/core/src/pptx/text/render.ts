@@ -21,7 +21,7 @@ import type { RenderDeps } from '../render/primitives.js';
  */
 const SINGLE_LINE_HEIGHT = 1.2;
 
-export function renderTextBody(body: TextBody, _deps: RenderDeps, flow = false): HTMLDivElement {
+export function renderTextBody(body: TextBody, deps: RenderDeps, flow = false): HTMLDivElement {
   const box = document.createElement('div');
   box.style.boxSizing = 'border-box';
   if (flow) {
@@ -39,6 +39,19 @@ export function renderTextBody(body: TextBody, _deps: RenderDeps, flow = false):
     // PowerPoint shows text that overflows its box (the "do not autofit" default)
     // rather than clipping it; only the slide edge clips.
     box.style.overflow = 'visible';
+    // Inside a non-uniformly scaled group, the ancestor CSS scale (sx,sy) would
+    // squish glyphs. PowerPoint keeps text aspect-correct and reflows in the
+    // scaled box, with the font following the vertical scale. Counter the
+    // horizontal squish with scaleX(sy/sx) and widen the layout box by the
+    // inverse so wrapping still happens at the geometric (scaled) width.
+    const gs = deps.groupScale;
+    if (gs && gs.sx > 0 && gs.sy > 0 && Math.abs(gs.sx - gs.sy) > 1e-4) {
+      const k = gs.sy / gs.sx;
+      box.style.right = 'auto';
+      box.style.width = `calc((100% - ${body.insets.l + body.insets.r}px) / ${k})`;
+      box.style.transform = `scaleX(${k})`;
+      box.style.transformOrigin = 'left center';
+    }
   }
 
   // Track auto-number counters per level.
