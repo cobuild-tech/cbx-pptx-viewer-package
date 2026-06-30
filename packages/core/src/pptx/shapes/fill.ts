@@ -66,8 +66,16 @@ function parseGradient(el: XmlNode, ctx: ParseScope['colorCtx']): Fill {
     const cssAngle = (angOoxml + 90) % 360;
     return { type: 'gradient', stops, angle: cssAngle, radial: false };
   }
-  // path (radial/rectangular) gradients are approximated as radial.
-  return { type: 'gradient', stops, radial: true };
+  // path (radial/rectangular) gradients are approximated as radial. The
+  // first stop sits at the focus point given by <a:fillToRect> insets; its
+  // centre is where the gradient radiates from (e.g. l=t=100% => bottom-right).
+  const ftr = child(child(el, 'path'), 'fillToRect');
+  const inset = (name: string) => (attrNum(ftr, name) ?? 0) / 100000;
+  const center = {
+    x: (inset('l') + (1 - inset('r'))) / 2,
+    y: (inset('t') + (1 - inset('b'))) / 2,
+  };
+  return { type: 'gradient', stops, radial: true, center };
 }
 
 /**

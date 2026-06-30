@@ -233,6 +233,12 @@ function setupSvgFill(svg: SVGSVGElement, fill: Fill | undefined, deps: RenderDe
       grad.setAttribute('y1', `${(y1 * 100).toFixed(1)}%`);
       grad.setAttribute('x2', `${(x2 * 100).toFixed(1)}%`);
       grad.setAttribute('y2', `${(y2 * 100).toFixed(1)}%`);
+    } else if (fill.center) {
+      // Focus the radial gradient (the first stop) at the path's center point.
+      grad.setAttribute('cx', `${(fill.center.x * 100).toFixed(1)}%`);
+      grad.setAttribute('cy', `${(fill.center.y * 100).toFixed(1)}%`);
+      grad.setAttribute('fx', `${(fill.center.x * 100).toFixed(1)}%`);
+      grad.setAttribute('fy', `${(fill.center.y * 100).toFixed(1)}%`);
     }
 
     for (const stop of fill.stops) {

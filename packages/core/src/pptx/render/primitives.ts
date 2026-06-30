@@ -46,9 +46,14 @@ export function applyFillBackground(el: HTMLElement, fill: Fill, deps: RenderDep
       break;
     case 'gradient': {
       const stops = fill.stops.map((s) => `${colorToCss(s.color)} ${(s.pos * 100).toFixed(1)}%`);
-      el.style.background = fill.radial
-        ? `radial-gradient(${stops.join(',')})`
-        : `linear-gradient(${fill.angle ?? 0}deg, ${stops.join(',')})`;
+      if (fill.radial) {
+        const at = fill.center
+          ? ` at ${(fill.center.x * 100).toFixed(1)}% ${(fill.center.y * 100).toFixed(1)}%`
+          : '';
+        el.style.background = `radial-gradient(farthest-corner${at}, ${stops.join(',')})`;
+      } else {
+        el.style.background = `linear-gradient(${fill.angle ?? 0}deg, ${stops.join(',')})`;
+      }
       break;
     }
     case 'image': {
