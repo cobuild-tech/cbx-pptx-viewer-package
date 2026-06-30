@@ -1,5 +1,23 @@
 import { describe, it, expect } from 'vitest';
-import { parseXml, child, children, path, attr, attrNum, attrBool } from '../src/oxml/xml.js';
+import {
+  parseXml,
+  serializeXml,
+  serializeNode,
+  child,
+  children,
+  path,
+  attr,
+  attrNum,
+  attrBool,
+  createElement,
+  cloneNode,
+  setText,
+  setAttr,
+  removeAttr,
+  insertChildAt,
+  removeChildAt,
+  resolveIndexPath,
+} from '../src/oxml/xml.js';
 
 describe('xml normalization', () => {
   const xml = parseXml(`
@@ -55,5 +73,99 @@ describe('xml normalization', () => {
     expect(attrBool(n, 'i')).toBe(false);
     expect(attrBool(n, 'u', true)).toBe(true);
     expect(attr(n, 'missing')).toBeUndefined();
+  });
+});
+
+describe('xml serialization (round-trip)', () => {
+  /** parse → serialize → parse must yield a structurally identical tree. */
+  const roundTrips = (xml: string) => {
+    const a = parseXml(xml)!;
+    const b = parseXml(serializeXml(a))!;
+    expect(b).toEqual(a);
+  };
+
+  it('round-trips a realistic WordprocessingML body', () => {
+    roundTrips(
+      '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+        '<w:body>' +
+        '<w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr>' +
+        '<w:r><w:rPr><w:b/><w:color w:val="FF0000"/></w:rPr><w:t>Title</w:t></w:r></w:p>' +
+        '<w:p><w:r><w:t xml:space="preserve">Hello </w:t></w:r>' +
+        '<w:r><w:br/><w:t>world</w:t></w:r></w:p>' +
+        '<w:tbl><w:tr><w:tc><w:p><w:r><w:t>cell</w:t></w:r></w:p></w:tc></w:tr></w:tbl>' +
+        '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/></w:sectPr>' +
+        '</w:body></w:document>',
+    );
+  });
+
+  it('round-trips even with insignificant inter-element whitespace', () => {
+    roundTrips(`
+      <w:p>
+        <w:r><w:t>Hi</w:t></w:r>
+      </w:p>`);
+  });
+
+  it('preserves child + break order through a round-trip', () => {
+    const a = parseXml('<w:r><w:t>a</w:t><w:br/><w:t>b</w:t></w:r>')!;
+    const b = parseXml(serializeXml(a))!;
+    expect(b.children.map((c) => c.name)).toEqual(['w:t', 'w:br', 'w:t']);
+  });
+
+  it('escapes entities in text and attributes', () => {
+    const node = parseXml('<w:t>a &amp; b &lt; c &gt; d</w:t>')!;
+    expect(node.text).toBe('a & b < c > d');
+    const out = serializeNode(node);
+    expect(out).toContain('&amp;');
+    expect(out).toContain('&lt;');
+    expect(parseXml(out)!.text).toBe('a & b < c > d');
+
+    const attrNode = parseXml('<x a="x &amp; &quot;y&quot;"/>')!;
+    expect(attr(attrNode, 'a')).toBe('x & "y"');
+    expect(parseXml(serializeNode(attrNode))!).toEqual(attrNode);
+  });
+
+  it('emits empty elements as self-closing', () => {
+    expect(serializeNode(parseXml('<w:br/>')!)).toBe('<w:br/>');
+    expect(serializeNode(createElement('w:b'))).toBe('<w:b/>');
+  });
+
+  it('preserves significant whitespace with xml:space', () => {
+    roundTrips('<w:t xml:space="preserve">  spaced  </w:t>');
+  });
+});
+
+describe('xml mutation helpers', () => {
+  it('createElement / cloneNode are independent', () => {
+    const el = createElement('w:t', { 'xml:space': 'preserve' }, [], 'hi');
+    const copy = cloneNode(el);
+    setText(copy, 'bye');
+    setAttr(copy, 'w:val', '1');
+    expect(el.text).toBe('hi');
+    expect(attr(el, 'w:val')).toBeUndefined();
+    expect(copy.text).toBe('bye');
+    expect(attr(copy, 'w:val')).toBe('1');
+  });
+
+  it('removeAttr matches by qualified or local name', () => {
+    const n = createElement('w:p', { 'w:rsidR': '00AB', 'w:rsidRDefault': '00CD' });
+    removeAttr(n, 'rsidR');
+    expect(attr(n, 'w:rsidR')).toBeUndefined();
+    expect(attr(n, 'w:rsidRDefault')).toBe('00CD');
+  });
+
+  it('inserts, removes, and resolves child paths by index', () => {
+    const body = createElement('w:body', {}, [
+      createElement('w:p', {}, [], 'one'),
+      createElement('w:p', {}, [], 'three'),
+    ]);
+    insertChildAt(body, 1, createElement('w:p', {}, [], 'two'));
+    expect(body.children.map((c) => c.text)).toEqual(['one', 'two', 'three']);
+
+    expect(resolveIndexPath(body, [2])?.text).toBe('three');
+    expect(resolveIndexPath(body, [9])).toBeUndefined();
+
+    const removed = removeChildAt(body, 0);
+    expect(removed?.text).toBe('one');
+    expect(body.children.map((c) => c.text)).toEqual(['two', 'three']);
   });
 });

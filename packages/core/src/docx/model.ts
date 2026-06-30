@@ -8,7 +8,7 @@
  * Shared types (TextRun, Bullet, Color, Fill, Stroke) are re-exported from the
  * PPTX model since Word uses the same DrawingML primitives.
  */
-import type { Stroke } from '../pptx/model.js';
+import type { Stroke, TextRun } from '../pptx/model.js';
 
 export type {
   Color,
@@ -21,6 +21,13 @@ export type {
   EmbeddedFont,
   EmbeddedFontFace,
 } from '../pptx/model.js';
+
+/**
+ * A text run tagged with the id of its source `<w:r>` node, so an edit made on
+ * the rendered DOM can be mapped back to the exact OOXML element to mutate.
+ * `nodeId` is only populated when the document is loaded in editable mode.
+ */
+export type DocxRun = TextRun & { nodeId?: string };
 
 // ─── Page geometry ──────────────────────────────────────────────────────────
 
@@ -44,7 +51,9 @@ export type DocxBlock = DocxParagraph | DocxTable | DocxInlineImage;
 
 export interface DocxParagraph {
   kind: 'paragraph';
-  runs: import('../pptx/model.js').TextRun[];
+  runs: DocxRun[];
+  /** Id of the source `<w:p>` node (editable mode only). */
+  nodeId?: string;
   /** Resolved style name, e.g. 'Normal', 'Heading1'. */
   styleName: string;
   /** Paragraph default font family from the style chain (not hardcoded). */
@@ -94,6 +103,8 @@ export interface DocxTable {
 
 export interface DocxTableCell {
   content: DocxParagraph[];
+  /** Id of the source `<w:tc>` node (editable mode only). */
+  nodeId?: string;
   fill: import('../pptx/model.js').Fill;
   rowSpan: number;
   colSpan: number;
@@ -112,6 +123,8 @@ export interface DocxInlineImage {
   kind: 'image';
   /** Resolved media part path inside the OPC package. */
   part: string;
+  /** Id of the source `<w:r>` node wrapping the `<w:drawing>` (editable mode only). */
+  nodeId?: string;
   widthPx: number;
   heightPx: number;
   alt?: string;

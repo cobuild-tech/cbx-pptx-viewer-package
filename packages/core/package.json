@@ -12,7 +12,9 @@
       "import": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "vite build",
     "test": "vitest run",
@@ -20,10 +22,11 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "fflate": "^0.8.2",
-    "fast-xml-parser": "^4.5.1"
+    "fast-xml-parser": "^4.5.1",
+    "fflate": "^0.8.2"
   },
   "devDependencies": {
+    "jsdom": "^29.1.1",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
     "vite-plugin-dts": "^4.4.0",

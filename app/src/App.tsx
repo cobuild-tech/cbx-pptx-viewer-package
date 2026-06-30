@@ -1,7 +1,8 @@
-import { Suspense, lazy, useCallback, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { PptxViewer } from '@pptx-viewer/react';
 import { DocxViewer } from '@pptx-viewer/react';
+import { InMemoryVersionStore } from '@pptx-viewer/core';
 
 const PptxReactViewerWrap = lazy(() => import('./renderers/PptxReactViewerWrap'));
 const PptxViewJsWrap = lazy(() => import('./renderers/PptxViewJsWrap'));
@@ -52,7 +53,11 @@ export function App() {
   const [mode, setMode] = useState<FileType>('pptx');
   const [renderer, setRenderer] = useState<RendererId>('mine');
   const [dragging, setDragging] = useState(false);
+  const [editMode, setEditMode] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  // One version store for the session. Swap for a backend-folder adapter
+  // (implements DocxVersionStore) to persist versions across reloads.
+  const versionStore = useMemo(() => new InMemoryVersionStore(), []);
 
   const accept = useCallback((f: File | undefined) => {
     if (!f) return;
@@ -61,12 +66,14 @@ export function App() {
     setFile(f);
     setMode(type);
     setRenderer(type === 'docx' ? 'mine-docx' : 'mine');
+    setEditMode(false);
   }, []);
 
   const switchMode = useCallback((next: FileType) => {
     setMode(next);
     setFile(null);
     setRenderer(next === 'docx' ? 'mine-docx' : 'mine');
+    setEditMode(false);
   }, []);
 
   const onDrop = useCallback(
@@ -144,6 +151,17 @@ export function App() {
           </label>
         )}
 
+        {/* Edit toggle (DOCX only) */}
+        {file && mode === 'docx' && (
+          <button
+            style={{ ...uploadBtn, background: editMode ? '#1f7a3d' : '#3a3a3a' }}
+            onClick={() => setEditMode((v) => !v)}
+            title="Toggle inline editing"
+          >
+            {editMode ? '✓ Editing' : '✎ Edit'}
+          </button>
+        )}
+
         {/* File info chip */}
         {file && (
           <div style={fileChip}>
@@ -193,9 +211,17 @@ export function App() {
               <CyntlerViewerWrap key={`cyn:${file.name}`} file={file} />
             )}
 
-            {/* DOCX renderer */}
+            {/* DOCX renderer — note: editMode is NOT in the key, so toggling edit
+                mode does not remount/reload the doc (edits persist across modes). */}
             {mode === 'docx' && renderer === 'mine-docx' && (
-              <DocxViewer key={`docx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+              <DocxViewer
+                key={`docx:${file.name}`}
+                src={file}
+                editable={editMode}
+                versionStore={versionStore}
+                onVersionSaved={() => setEditMode(false)}
+                style={{ flex: 1, minHeight: 0 }}
+              />
             )}
           </Suspense>
         ) : (

@@ -12,6 +12,7 @@
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipsToPx } from '../units.js';
 import { OpcPackage } from '../../oxml/package.js';
+import { encodeNodeId } from '../edit/nodeId.js';
 import type { DocxBlock, DocxTable, DocxPage, DocxPageSize, DocxPageMargins, DocxParagraph } from '../model.js';
 import { StyleMap } from '../styles/styles.js';
 import { NumberingMap } from '../numbering/numbering.js';
@@ -69,7 +70,12 @@ export type BlockHeightFn = (block: DocxBlock, contentWidthPx: number) => number
 
 // ─── Entry points ─────────────────────────────────────────────────────────────
 
-export function collectDocxContent(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxFlatContent {
+export function collectDocxContent(
+  bodyEl: XmlNode,
+  ctx: BodyBuildCtx,
+  /** Child-index path to `<w:body>` from the part root (editable mode). */
+  bodyPath: number[] = [],
+): DocxFlatContent {
   const bodySectPrEl = bodyEl.children.slice().reverse().find(
     (n) => localName(n.name) === 'sectPr',
   );
@@ -80,7 +86,7 @@ export function collectDocxContent(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxFlat
     ? readHeaderFooter(bodySectPrEl, ctx)
     : {};
 
-  const taggedBlocks = collectBlocks(bodyEl, ctx);
+  const taggedBlocks = collectBlocks(bodyEl, ctx, bodyPath);
   return { taggedBlocks, initSize, initMargins, initHeader, initFooter };
 }
 
@@ -104,7 +110,7 @@ export function buildPages(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxPage[] {
 
 // ─── Phase 1: collect all blocks with break metadata ─────────────────────────
 
-function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxTaggedBlock[] {
+function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx, bodyPath: number[]): DocxTaggedBlock[] {
   const out: DocxTaggedBlock[] = [];
   const listCounters = new Map<string, number>();
 
@@ -116,28 +122,32 @@ function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxTaggedBlock[] {
     return rel?.mode === 'External' ? rel.rawTarget : undefined;
   }
 
-  const paraCtx = { styles: ctx.styles, numbering: ctx.numbering, listCounters, resolveImage, resolveHyperlink };
+  const paraCtx = { styles: ctx.styles, numbering: ctx.numbering, listCounters, resolveImage, resolveHyperlink, partPath: ctx.docPart };
 
-  for (const node of bodyEl.children) {
+  for (let i = 0; i < bodyEl.children.length; i++) {
+    const node = bodyEl.children[i]!;
     const name = localName(node.name);
 
     if (name === 'p') {
       const pPr = child(node, 'pPr');
       const sectPr = child(pPr, 'sectPr');
 
-      const { paragraphs, endsWithPageBreak } = parseParagraph(node, paraCtx);
+      const { paragraphs, endsWithPageBreak } = parseParagraph(node, paraCtx, [...bodyPath, i]);
 
       const inlineImages: import('../model.js').DocxInlineImage[] = [];
-      for (const childNode of node.children) {
+      node.children.forEach((childNode, rIdx) => {
         if (localName(childNode.name) === 'r') {
           for (const gc of childNode.children) {
             if (localName(gc.name) === 'drawing') {
               const img = parseDrawing(gc, resolveImage);
-              if (img) inlineImages.push(img);
+              if (img) {
+                img.nodeId = encodeNodeId(ctx.docPart, [...bodyPath, i, rIdx]);
+                inlineImages.push(img);
+              }
             }
           }
         }
-      }
+      });
 
       const hasText = paragraphs.some(p => p.runs.some(r => r.text.trim()));
       const skipPara = inlineImages.length > 0 && !hasText;
@@ -175,7 +185,7 @@ function collectBlocks(bodyEl: XmlNode, ctx: BodyBuildCtx): DocxTaggedBlock[] {
       }
 
     } else if (name === 'tbl') {
-      out.push({ block: parseTable(node, paraCtx), breakBefore: false, breakAfter: false });
+      out.push({ block: parseTable(node, paraCtx, [...bodyPath, i]), breakBefore: false, breakAfter: false });
 
     } else if (name === 'sectPr') {
       const { size, margins } = readSectPr(node);
@@ -448,22 +458,26 @@ function parseHeaderFooterPart(xml: XmlNode, ctx: BodyBuildCtx, part: string): D
     const rel = ctx.pkg.resolveRel(part, relId);
     return rel?.mode === 'External' ? rel.rawTarget : undefined;
   };
-  const paraCtx = { styles: ctx.styles, numbering: ctx.numbering, listCounters, resolveImage, resolveHyperlink };
-  for (const node of xml.children) {
+  const paraCtx = { styles: ctx.styles, numbering: ctx.numbering, listCounters, resolveImage, resolveHyperlink, partPath: part };
+  for (let i = 0; i < xml.children.length; i++) {
+    const node = xml.children[i]!;
     if (localName(node.name) === 'p') {
-      const { paragraphs } = parseParagraph(node, paraCtx);
+      const { paragraphs } = parseParagraph(node, paraCtx, [i]);
 
       const imgs: import('../model.js').DocxInlineImage[] = [];
-      for (const childNode of node.children) {
+      node.children.forEach((childNode, rIdx) => {
         if (localName(childNode.name) === 'r') {
           for (const gc of childNode.children) {
             if (localName(gc.name) === 'drawing') {
               const img = parseDrawing(gc, resolveImage);
-              if (img) imgs.push(img);
+              if (img) {
+                img.nodeId = encodeNodeId(part, [i, rIdx]);
+                imgs.push(img);
+              }
             }
           }
         }
-      }
+      });
 
       const hasText = paragraphs.some(p => p.runs.some(r => r.text.trim()));
       if (imgs.length === 0 || hasText) blocks.push(...paragraphs);

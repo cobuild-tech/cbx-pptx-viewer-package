@@ -6,11 +6,15 @@
 import type { DocxDocument } from '../document/document.js';
 import { renderPage, renderBlock } from '../render/dom.js';
 import type { DocxPage } from '../model.js';
+import { DocxEditController, type EditContext } from './editing.js';
+import type { RunPropPatch } from '../edit/ops.js';
 
 export interface DocxViewerOptions {
   startIndex?: number;
   /** Enable keyboard navigation (PageUp/Down, arrow keys). Default true. */
   keyboard?: boolean;
+  /** Enable inline WYSIWYG editing (contenteditable + formatting). Default false. */
+  editable?: boolean;
   /** Called whenever the most-visible page changes. */
   onChange?: (index: number, count: number) => void;
 }
@@ -34,6 +38,9 @@ export class DocxViewer {
   private resizeObserver: ResizeObserver | null = null;
   private intersectionObserver: IntersectionObserver | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
+  private editable = false;
+  private editController: DocxEditController | null = null;
+  private changeUnsub: (() => void) | null = null;
 
   constructor(doc: DocxDocument, container: HTMLElement, options: DocxViewerOptions = {}) {
     this.doc = doc;
@@ -142,18 +149,18 @@ export class DocxViewer {
     shell.appendChild(this.sidebarEl);
 
     // ── DOM-measured pagination then render ───────────────────────────────
-    const pages = this.measureAndPaginate();
-    this.renderPages(pages);
+    this.editable = options.editable === true;
+    // Controller is created up front; it is only *attached* while editable, so
+    // editing can be toggled on/off later without recreating the viewer or
+    // reloading the document (edits persist across mode switches).
+    this.editController = new DocxEditController(doc);
 
-    this.applyZoom();
-    this.updateActiveThumb(0);
+    this.renderAll();
 
     this.resizeObserver = new ResizeObserver(() => {
       if (this.userZoom === null) this.applyZoom();
     });
     this.resizeObserver.observe(container);
-
-    this.setupIntersection();
 
     if (options.keyboard !== false) this.enableKeyboard();
 
@@ -161,6 +168,46 @@ export class DocxViewer {
     if (start > 0) requestAnimationFrame(() => this.goTo(start));
 
     this.onChange?.(0, this.count);
+
+    // Re-render whenever the document is edited (in any mode).
+    this.changeUnsub = doc.onChange(() => this.rerender());
+  }
+
+  /** Whether inline editing is currently active. */
+  get isEditable(): boolean {
+    return this.editable;
+  }
+
+  /** Toggle inline editing without recreating the viewer or reloading the doc. */
+  setEditable(on: boolean): void {
+    if (this.editable === on) return;
+    this.editable = on;
+    if (!on) this.editController?.detach();
+    this.rerender(); // renderAll re-attaches the controller iff editable
+  }
+
+  /** (Re)build the page + thumbnail DOM from current content; re-attaches editing. */
+  private renderAll(): void {
+    this.intersectionObserver?.disconnect();
+    this.scrollEl.replaceChildren();
+    this.sidebarEl.replaceChildren();
+    this.pageEls.length = 0;
+    this.thumbEls.length = 0;
+
+    const pages = this.measureAndPaginate();
+    this.renderPages(pages);
+    this.applyZoom();
+    this.index = Math.min(this.index, Math.max(0, this.pageEls.length - 1));
+    this.updateActiveThumb(this.index);
+    this.setupIntersection();
+    if (this.editable) this.editController?.attach(this.scrollEl);
+  }
+
+  /** Re-render after an edit, preserving scroll position. */
+  private rerender(): void {
+    const scrollTop = this.scrollEl.scrollTop;
+    this.renderAll();
+    this.scrollEl.scrollTop = scrollTop;
   }
 
   // ── DOM measurement → repagination ────────────────────────────────────────
@@ -198,34 +245,37 @@ export class DocxViewer {
       return this.doc.pages;
     }
 
-    const pages = this.doc.repaginate((block, contentWidthPx) => {
-      // Images carry explicit dimensions — trust them directly.
-      if (block.kind === 'image') return block.heightPx + 4;
+    let pages: DocxPage[];
+    try {
+      pages = this.doc.repaginate((block, contentWidthPx) => {
+        // Images carry explicit dimensions — trust them directly.
+        if (block.kind === 'image') return block.heightPx + 4;
 
-      const el = renderBlock(block, deps);
-      if (!el) return 10;
+        const el = renderBlock(block, deps);
+        if (!el) return 10;
 
-      scratch.style.width = `${contentWidthPx}px`;
-      scratch.appendChild(el);
+        scratch.style.width = `${contentWidthPx}px`;
+        scratch.appendChild(el);
 
-      if (block.kind === 'table') {
-        // Return per-row heights so the paginator can split the table across pages.
-        const trEls = el.querySelectorAll('tr');
-        const rowHeights: number[] = [];
-        for (const tr of trEls) {
-          rowHeights.push(Math.max(0, tr.getBoundingClientRect().height));
+        if (block.kind === 'table') {
+          // Return per-row heights so the paginator can split the table across pages.
+          const trEls = el.querySelectorAll('tr');
+          const rowHeights: number[] = [];
+          for (const tr of trEls) {
+            rowHeights.push(Math.max(0, tr.getBoundingClientRect().height));
+          }
+          scratch.removeChild(el);
+          return rowHeights.length > 0 ? rowHeights : [el.getBoundingClientRect().height];
         }
+
+        const h = el.getBoundingClientRect().height;
         scratch.removeChild(el);
-        return rowHeights.length > 0 ? rowHeights : [el.getBoundingClientRect().height];
-      }
-
-      const h = el.getBoundingClientRect().height;
-      scratch.removeChild(el);
-      // Add a small margin buffer (paragraph spacing, etc.) to avoid tight cuts.
-      return Math.max(4, h);
-    });
-
-    document.body.removeChild(scratch);
+        // Add a small margin buffer (paragraph spacing, etc.) to avoid tight cuts.
+        return Math.max(4, h);
+      });
+    } finally {
+      document.body.removeChild(scratch);
+    }
     return pages;
   }
 
@@ -325,6 +375,47 @@ export class DocxViewer {
     this.applyZoom();
   }
 
+  // ── Editing API (active only when constructed with editable: true) ─────────
+
+  get canUndo(): boolean { return this.doc.canUndo; }
+  get canRedo(): boolean { return this.doc.canRedo; }
+  get isEdited(): boolean { return this.doc.isEdited; }
+  undo(): void { this.doc.undo(); }
+  redo(): void { this.doc.redo(); }
+
+  /** Apply run formatting to the current selection (or focused run). */
+  format(props: RunPropPatch): void { this.editController?.format(props); }
+
+  /** Toggle a boolean run prop (bold/italic/underline/strike) on the selection. */
+  toggleFormat(prop: 'bold' | 'italic' | 'underline' | 'strike'): void {
+    this.editController?.toggleProp(prop);
+  }
+
+  /** The run/paragraph/cell the user last interacted with (for structural actions). */
+  editContext(): EditContext { return this.editController?.context ?? {}; }
+
+  insertParagraph(): void {
+    const id = this.editController?.context.paragraphId;
+    if (id) this.doc.insertParagraphAfter(id);
+  }
+  deleteParagraph(): void {
+    const id = this.editController?.context.paragraphId;
+    if (id) this.doc.deleteNode(id);
+  }
+  insertTableRow(): void {
+    const id = this.editController?.context.cellId;
+    if (id) this.doc.insertRowAfter(id);
+  }
+  deleteTableRow(): void {
+    const id = this.editController?.context.cellId;
+    if (id) this.doc.deleteRow(id);
+  }
+
+  /** Export the (edited) document as .docx bytes. */
+  exportDocx(): Uint8Array { return this.doc.export(); }
+  /** Export the (edited) document as a .docx Blob (for download). */
+  exportBlob(): Blob { return this.doc.exportBlob(); }
+
   // ── Internal helpers ──────────────────────────────────────────────────────
 
   private currentZoomValue(): number {
@@ -362,6 +453,7 @@ export class DocxViewer {
 
   private setupIntersection(): void {
     if (typeof IntersectionObserver === 'undefined') return;
+    this.intersectionObserver?.disconnect();
     const ratios = new Map<number, number>();
     this.intersectionObserver = new IntersectionObserver(
       (entries) => {
@@ -388,6 +480,10 @@ export class DocxViewer {
   private enableKeyboard(): void {
     if (this.container.tabIndex < 0) this.container.tabIndex = 0;
     this.keyHandler = (e: KeyboardEvent) => {
+      // Never hijack keys (space, arrows, -, +, 0, …) while the user is typing
+      // in an editable region — that text input must reach the contenteditable.
+      const t = e.target as HTMLElement | null;
+      if (t && (t.isContentEditable || t.closest?.('[contenteditable="true"]'))) return;
       switch (e.key) {
         case 'ArrowDown': case 'PageDown': case ' ':
           e.preventDefault(); this.next(); break;
@@ -404,6 +500,8 @@ export class DocxViewer {
   }
 
   destroy(): void {
+    this.changeUnsub?.();
+    this.editController?.detach();
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     if (this.keyHandler) this.container.removeEventListener('keydown', this.keyHandler);

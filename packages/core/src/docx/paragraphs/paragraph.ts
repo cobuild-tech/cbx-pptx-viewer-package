@@ -4,16 +4,16 @@
  * Converts a <w:p> element into a DocxParagraph IR node, resolving style
  * inheritance, list numbering, hyperlinks, and inline images.
  */
-import { child, children, attr, localName, type XmlNode } from '../../oxml/xml.js';
+import { child, attr, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipsToPx } from '../units.js';
-import type { DocxParagraph, DocxBlock } from '../model.js';
-import type { TextRun } from '../model.js';
+import type { DocxParagraph, DocxBlock, DocxRun } from '../model.js';
 import type { Stroke } from '../model.js';
 import { StyleMap, mergeParaProps, mergeRunProps } from '../styles/styles.js';
 import type { ParaBorderSide } from '../styles/styles.js';
 import { NumberingMap } from '../numbering/numbering.js';
 import { parseRun, runHasPageBreak } from './run.js';
 import { parseDrawing } from '../images/image.js';
+import { encodeNodeId } from '../edit/nodeId.js';
 
 export interface ParagraphParseCtx {
   styles: StyleMap;
@@ -22,6 +22,8 @@ export interface ParagraphParseCtx {
   listCounters: Map<string, number>;
   resolveImage: (relId: string) => string | undefined;
   resolveHyperlink: (relId: string) => string | undefined;
+  /** OPC part this content lives in (for nodeId stamping in editable mode). */
+  partPath?: string;
 }
 
 export interface ParagraphResult {
@@ -37,7 +39,12 @@ export interface ParagraphResult {
 export function parseParagraph(
   pEl: XmlNode,
   ctx: ParagraphParseCtx,
+  /** Child-index path to this `<w:p>` from the part root (editable mode). */
+  path?: number[],
 ): ParagraphResult {
+  const nodeId = path && ctx.partPath ? encodeNodeId(ctx.partPath, path) : undefined;
+  const runNodeId = (...suffix: number[]): string | undefined =>
+    path && ctx.partPath ? encodeNodeId(ctx.partPath, [...path, ...suffix]) : undefined;
   const pPr = child(pEl, 'pPr');
 
   // Resolve base style.
@@ -72,7 +79,7 @@ export function parseParagraph(
   if (pRpr) mergeRunProps(baseRun, pRpr);
 
   // Parse runs, hyperlinks, and drawing elements.
-  const runs: TextRun[] = [];
+  const runs: DocxRun[] = [];
   let endsWithPageBreak = false;
   const paragraphs: DocxParagraph[] = [];
 
@@ -84,7 +91,8 @@ export function parseParagraph(
     pageBreakBefore = val === undefined || (val !== '0' && val !== 'false');
   }
 
-  for (const node of pEl.children) {
+  for (let childIdx = 0; childIdx < pEl.children.length; childIdx++) {
+    const node = pEl.children[childIdx]!;
     const name = localName(node.name);
 
     if (name === 'r') {
@@ -92,7 +100,7 @@ export function parseParagraph(
       if (runHasPageBreak(node)) {
         // Flush current runs as a paragraph before the break.
         if (runs.length > 0) {
-          paragraphs.push(buildParagraph(runs.slice(), baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx));
+          paragraphs.push(buildParagraph(runs.slice(), baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx, nodeId));
           runs.length = 0;
           pageBreakBefore = false;
           bullet = undefined;
@@ -100,16 +108,22 @@ export function parseParagraph(
         endsWithPageBreak = true;
         continue;
       }
-      const run = parseRun(node, baseRun, ctx.resolveImage, ctx.styles);
-      if (run) runs.push(run);
+      const run = parseRun(node, baseRun, ctx.resolveImage, ctx.styles) as DocxRun | null;
+      if (run) {
+        run.nodeId = runNodeId(childIdx);
+        runs.push(run);
+      }
 
     } else if (name === 'hyperlink') {
       const relId = attr(node, 'r:id') ?? attr(node, 'id');
       const url = relId ? ctx.resolveHyperlink(relId) : undefined;
-      for (const rEl of children(node, 'r')) {
-        const run = parseRun(rEl, baseRun, ctx.resolveImage, ctx.styles);
+      for (let hIdx = 0; hIdx < node.children.length; hIdx++) {
+        const rEl = node.children[hIdx]!;
+        if (localName(rEl.name) !== 'r') continue;
+        const run = parseRun(rEl, baseRun, ctx.resolveImage, ctx.styles) as DocxRun | null;
         if (run) {
           if (url) run.hyperlink = url;
+          run.nodeId = runNodeId(childIdx, hIdx);
           runs.push(run);
         }
       }
@@ -131,13 +145,13 @@ export function parseParagraph(
     }
   }
 
-  paragraphs.push(buildParagraph(runs, baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx));
+  paragraphs.push(buildParagraph(runs, baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx, nodeId));
 
   return { paragraphs, endsWithPageBreak };
 }
 
 function buildParagraph(
-  runs: TextRun[],
+  runs: DocxRun[],
   styleName: string,
   para: ReturnType<typeof import('../styles/styles.js').StyleMap.prototype.get>['para'],
   baseRun: ReturnType<typeof import('../styles/styles.js').StyleMap.prototype.get>['run'],
@@ -146,10 +160,12 @@ function buildParagraph(
   pageBreakBefore: boolean,
   listIndentLeftPx: number | undefined,
   listIndentFirstLinePx: number | undefined,
+  nodeId: string | undefined,
 ): DocxParagraph {
   return {
     kind: 'paragraph',
     runs,
+    nodeId,
     styleName,
     baseFontFamily: baseRun.fontAscii ?? baseRun.fontHAnsi,
     baseFontSizePt: baseRun.sizePt,

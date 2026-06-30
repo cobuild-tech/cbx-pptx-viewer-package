@@ -148,3 +148,128 @@ export function attrBool(
   if (v === undefined) return fallback;
   return v === '1' || v === 'true';
 }
+
+// ─── Serialization (write-back) ───────────────────────────────────────────────
+//
+// The reverse of parseXml. We hand-roll this rather than use fast-xml-parser's
+// XMLBuilder because the contract we need is *structural* fidelity, not byte
+// fidelity: on export, untouched parts are re-zipped from their original bytes
+// (see OpcPackage.toBytes), and only edited parts are re-serialized — Word
+// re-parses them, so exact byte layout is irrelevant as long as the XML is
+// valid and structurally identical when re-parsed.
+//
+// Faithfulness guarantee: parseXml(serializeXml(node)) deep-equals the original
+// node for any WordprocessingML tree. Children are emitted in order, attributes
+// in insertion order, and the concatenated `.text` is emitted after children
+// (OOXML structural elements have no mixed content, so position is immaterial;
+// re-parsing concatenates direct text back into `.text` identically).
+
+const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\r\n';
+
+function escapeText(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function escapeAttr(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/** Serialize a single node and its subtree to an XML fragment (no declaration). */
+export function serializeNode(node: XmlNode): string {
+  let attrs = '';
+  for (const [k, v] of Object.entries(node.attrs)) {
+    attrs += ` ${k}="${escapeAttr(v)}"`;
+  }
+  const hasChildren = node.children.length > 0;
+  const hasText = node.text.length > 0;
+  if (!hasChildren && !hasText) return `<${node.name}${attrs}/>`;
+
+  let inner = '';
+  for (const c of node.children) inner += serializeNode(c);
+  if (hasText) inner += escapeText(node.text);
+  return `<${node.name}${attrs}>${inner}</${node.name}>`;
+}
+
+/** Serialize a part root to a complete XML document string (with declaration). */
+export function serializeXml(node: XmlNode): string {
+  return XML_DECL + serializeNode(node);
+}
+
+// ─── Mutation helpers ─────────────────────────────────────────────────────────
+//
+// XmlNode is a plain mutable object, so these are thin, but centralizing them
+// keeps the edit layer readable and the invariants in one place.
+
+/** Construct a new element node. */
+export function createElement(
+  name: string,
+  attrs: Record<string, string> = {},
+  children: XmlNode[] = [],
+  text = '',
+): XmlNode {
+  return { name, attrs: { ...attrs }, children, text };
+}
+
+/** Deep-clone a node and its subtree (no shared references). */
+export function cloneNode(node: XmlNode): XmlNode {
+  return {
+    name: node.name,
+    attrs: { ...node.attrs },
+    children: node.children.map(cloneNode),
+    text: node.text,
+  };
+}
+
+/** Replace a node's direct text content. */
+export function setText(node: XmlNode, text: string): void {
+  node.text = text;
+}
+
+/** Set (or add) an attribute by its qualified name. */
+export function setAttr(node: XmlNode, name: string, value: string): void {
+  node.attrs[name] = value;
+}
+
+/** Remove an attribute, matching by qualified or local name (prefix-robust). */
+export function removeAttr(node: XmlNode, name: string): void {
+  if (name in node.attrs) {
+    delete node.attrs[name];
+    return;
+  }
+  const queryLocal = localName(name);
+  for (const k of Object.keys(node.attrs)) {
+    if (localName(k) === queryLocal) delete node.attrs[k];
+  }
+}
+
+export function insertChildAt(parent: XmlNode, index: number, child: XmlNode): void {
+  parent.children.splice(Math.max(0, Math.min(index, parent.children.length)), 0, child);
+}
+
+export function removeChildAt(parent: XmlNode, index: number): XmlNode | undefined {
+  if (index < 0 || index >= parent.children.length) return undefined;
+  return parent.children.splice(index, 1)[0];
+}
+
+export function replaceChildAt(parent: XmlNode, index: number, child: XmlNode): void {
+  if (index < 0 || index >= parent.children.length) return;
+  parent.children[index] = child;
+}
+
+/**
+ * Resolve a chain of child indices from `root` to a descendant node.
+ * e.g. resolveIndexPath(documentRoot, [1, 4, 0]) === body.children[4].children[0]
+ * Returns undefined if any index is out of range.
+ */
+export function resolveIndexPath(root: XmlNode, indexPath: number[]): XmlNode | undefined {
+  let cur: XmlNode | undefined = root;
+  for (const i of indexPath) {
+    if (!cur || i < 0 || i >= cur.children.length) return undefined;
+    cur = cur.children[i];
+  }
+  return cur;
+}

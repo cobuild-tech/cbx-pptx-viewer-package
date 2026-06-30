@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
 import { OpcPackage } from '../src/oxml/package.js';
+import { createElement } from '../src/oxml/xml.js';
 import { RelType } from '../src/pptx/relTypes.js';
 
 /**
@@ -87,5 +88,44 @@ describe('OpcPackage', () => {
     expect(xml?.name).toBe('p:sld');
     // Second call returns the cached node (same reference).
     expect(pkg.getXml('ppt/slides/slide1.xml')).toBe(xml);
+  });
+});
+
+describe('OpcPackage write-back & re-zip', () => {
+  it('setPart replaces one part and leaves all others byte-identical', () => {
+    const pkg = OpcPackage.load(buildPackage());
+    const untouchedBefore = pkg.getBytes('[Content_Types].xml')!;
+    const imageBefore = pkg.getBytes('ppt/media/image1.png')!;
+
+    expect(pkg.hasEdits).toBe(false);
+    pkg.setPart('ppt/slides/slide1.xml', '<p:sld edited="1"/>');
+    expect(pkg.hasEdits).toBe(true);
+
+    const reloaded = OpcPackage.load(pkg.toBytes());
+    expect(reloaded.getText('ppt/slides/slide1.xml')).toContain('edited="1"');
+    // Every untouched part survives unchanged through the re-zip.
+    expect(reloaded.getBytes('[Content_Types].xml')).toEqual(untouchedBefore);
+    expect(reloaded.getBytes('ppt/media/image1.png')).toEqual(imageBefore);
+  });
+
+  it('re-serializes a mutated node on export (markDirty)', () => {
+    const pkg = OpcPackage.load(buildPackage());
+    const node = pkg.getXml('ppt/slides/slide1.xml')!; // <p:sld/>
+    node.children.push(createElement('p:cSld'));
+    pkg.markDirty('ppt/slides/slide1.xml');
+
+    expect(pkg.hasEdits).toBe(true);
+    expect(pkg.serializePart('ppt/slides/slide1.xml')).toContain('<p:cSld/>');
+
+    const reloaded = OpcPackage.load(pkg.toBytes());
+    const rnode = reloaded.getXml('ppt/slides/slide1.xml')!;
+    expect(rnode.children.map((c) => c.name)).toContain('p:cSld');
+  });
+
+  it('setPart invalidates the parse cache so getXml re-parses', () => {
+    const pkg = OpcPackage.load(buildPackage());
+    expect(pkg.getXml('ppt/slides/slide1.xml')?.name).toBe('p:sld');
+    pkg.setPart('ppt/slides/slide1.xml', '<p:sldReplaced/>');
+    expect(pkg.getXml('ppt/slides/slide1.xml')?.name).toBe('p:sldReplaced');
   });
 });
