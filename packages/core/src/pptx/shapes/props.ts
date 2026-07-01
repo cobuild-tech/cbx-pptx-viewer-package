@@ -48,6 +48,8 @@ export interface SlideBuildCtx {
   masterPhs: PhInfo[];
   /** The `<p:txStyles>` element of the slide master, if present. */
   masterTxStyles?: XmlNode;
+  /** The presentation's `<p:defaultTextStyle>` — base styles for text boxes. */
+  defaultTextStyle?: XmlNode;
   scopes: SlideScopes;
   /** Access to other package parts referenced by this slide's frames. */
   parts: PartResolver;
@@ -248,5 +250,9 @@ export function buildTextChain(
     const masterStyle = child(ctx.masterTxStyles, masterStyleKey(ph.type));
     if (masterStyle) chain.push(masterStyle);
   }
+  // Presentation defaultTextStyle is the least-specific fallback (PowerPoint
+  // applies it to text boxes); it supplies list-level indents/alignment when
+  // nothing more specific does.
+  if (ctx.defaultTextStyle) chain.push(ctx.defaultTextStyle);
   return new TextStyleChain(chain, ctx.colorCtx);
 }

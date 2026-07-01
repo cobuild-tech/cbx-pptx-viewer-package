@@ -29,6 +29,11 @@ export type Fill =
       /** Linear angle in degrees (CSS convention). Omitted for radial. */
       angle?: number;
       radial: boolean;
+      /**
+       * Radial focus center as fractions {x,y} of the box (0..1), from a path
+       * gradient's `fillToRect`. The first stop sits here; omitted = centered.
+       */
+      center?: { x: number; y: number };
     }
   | {
       type: 'image';

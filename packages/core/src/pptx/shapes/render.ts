@@ -109,8 +109,16 @@ export function renderGroup(shape: GroupShape, deps: RenderDeps): HTMLElement {
   const sy = co.h > 1 && shape.transform ? shape.transform.h / co.h : 1;
   inner.style.transform = `scale(${sx}, ${sy}) translate(${-co.x}px, ${-co.y}px)`;
 
+  // The CSS scale above squishes geometry (correct — PowerPoint stretches a
+  // group's shapes too) but also squishes glyphs (wrong). Pass the cumulative
+  // ancestor scale down so the text renderer can keep glyphs un-squished.
+  const cSx = (deps.groupScale?.sx ?? 1) * sx;
+  const cSy = (deps.groupScale?.sy ?? 1) * sy;
+  const childDeps: RenderDeps =
+    cSx !== 1 || cSy !== 1 ? { ...deps, groupScale: { sx: cSx, sy: cSy } } : deps;
+
   for (const childShape of shape.children) {
-    const childEl = renderShape(childShape, deps);
+    const childEl = renderShape(childShape, childDeps);
     if (childEl) inner.appendChild(childEl);
   }
   el.appendChild(inner);
@@ -126,8 +134,12 @@ function strokeOverlay(
   evenodd = false,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('width', `${w}`);
-  svg.setAttribute('height', `${h}`);
+  // A straight horizontal/vertical line has a zero-area box (e.g. 94×0). A
+  // zero-dimension <svg> isn't painted by the browser even with overflow
+  // visible, so the line vanishes — clamp the viewport to a minimum. The path
+  // coordinates are unchanged, so the stroke stays centered on the box edge.
+  svg.setAttribute('width', `${Math.max(w, 1)}`);
+  svg.setAttribute('height', `${Math.max(h, 1)}`);
   svg.style.position = 'absolute';
   svg.style.inset = '0';
   svg.style.overflow = 'visible';
@@ -229,6 +241,12 @@ function setupSvgFill(svg: SVGSVGElement, fill: Fill | undefined, deps: RenderDe
       grad.setAttribute('y1', `${(y1 * 100).toFixed(1)}%`);
       grad.setAttribute('x2', `${(x2 * 100).toFixed(1)}%`);
       grad.setAttribute('y2', `${(y2 * 100).toFixed(1)}%`);
+    } else if (fill.center) {
+      // Focus the radial gradient (the first stop) at the path's center point.
+      grad.setAttribute('cx', `${(fill.center.x * 100).toFixed(1)}%`);
+      grad.setAttribute('cy', `${(fill.center.y * 100).toFixed(1)}%`);
+      grad.setAttribute('fx', `${(fill.center.x * 100).toFixed(1)}%`);
+      grad.setAttribute('fy', `${(fill.center.y * 100).toFixed(1)}%`);
     }
 
     for (const stop of fill.stops) {
@@ -275,8 +293,9 @@ function customGeomSvg(
   deps: RenderDeps,
 ): SVGSVGElement {
   const svg = document.createElementNS(SVG_NS, 'svg');
-  svg.setAttribute('width', `${w}`);
-  svg.setAttribute('height', `${h}`);
+  // Clamp the viewport so a zero-area box (a straight custom line) still paints.
+  svg.setAttribute('width', `${Math.max(w, 1)}`);
+  svg.setAttribute('height', `${Math.max(h, 1)}`);
   svg.setAttribute('viewBox', `0 0 ${pw || w} ${ph || h}`);
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.style.position = 'absolute';

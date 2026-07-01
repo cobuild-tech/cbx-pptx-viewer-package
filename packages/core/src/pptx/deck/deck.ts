@@ -43,8 +43,12 @@ export class Deck {
     const size = readSlideSize(presXml);
     const slideParts = readSlideOrder(pkg, presPart, presXml);
 
+    // Presentation-wide default text style — the base list-level formatting
+    // (indents, alignment, sizes) for text in non-placeholder text boxes.
+    const defaultTextStyle = child(presXml, 'defaultTextStyle');
+
     const slides: Slide[] = slideParts.map((part, index) =>
-      buildSlide(pkg, part, index),
+      buildSlide(pkg, part, index, defaultTextStyle),
     );
     const embeddedFonts = readEmbeddedFonts(pkg, presPart, presXml);
     return new Deck(pkg, size, slides, embeddedFonts);

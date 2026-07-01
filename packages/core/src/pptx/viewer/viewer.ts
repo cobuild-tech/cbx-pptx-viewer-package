@@ -14,6 +14,7 @@
 import type { Deck } from '../deck/deck.js';
 import { renderSlide } from '../render/dom.js';
 import { installDeckFonts, type FontInstallation } from '../render/fonts.js';
+import { installWebFonts, type WebFontOptions } from '../render/webfonts.js';
 
 export interface ViewerOptions {
   startIndex?: number;
@@ -27,6 +28,13 @@ export interface ViewerOptions {
   fit?: 'contain' | 'width';
   /** Called whenever the current slide index changes. */
   onChange?: (index: number, count: number) => void;
+  /**
+   * Fetch the deck's fonts (and metric-compatible substitutes for Office fonts)
+   * from Google Fonts when they aren't available locally, so text wraps as it
+   * does in PowerPoint. Pass `false` to disable network font loading, or an
+   * object to customize the source.
+   */
+  webFonts?: boolean | WebFontOptions;
 }
 
 export class Viewer {
@@ -61,8 +69,21 @@ export class Viewer {
     this.resizeObserver = new ResizeObserver(() => this.applyScale());
     this.resizeObserver.observe(container);
 
-    // Install embedded fonts, then re-render so text uses the real font.
-    this.fonts = installDeckFonts(deck);
+    // Install the deck's fonts — embedded faces plus, for fonts not available
+    // locally, substitutes fetched from Google Fonts — then re-render so text
+    // reflows with correct metrics.
+    const embedded = installDeckFonts(deck);
+    const web =
+      options.webFonts === false
+        ? { ready: Promise.resolve(), dispose() {} }
+        : installWebFonts(deck, typeof options.webFonts === 'object' ? options.webFonts : {});
+    this.fonts = {
+      ready: Promise.all([embedded.ready, web.ready]).then(() => undefined),
+      dispose() {
+        embedded.dispose();
+        web.dispose();
+      },
+    };
     this.fonts.ready.then(() => {
       if (this.slideEl) this.goTo(this.index);
     });
