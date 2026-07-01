@@ -1,14 +1,19 @@
 /**
- * PdfViewer controller: mounts a {@link PdfDocument} into a container,
- * renders all pages to canvas elements, and presents a vertically scrollable
- * stack with a right-side thumbnail strip and zoom controls.
+ * PdfViewer controller — mounts a {@link PdfDocument} into a container,
+ * renders all pages to canvas, and presents a vertically scrollable stack
+ * with a right-side thumbnail strip and zoom controls.
  *
- * Mirrors the DocxViewer API exactly: goTo / next / prev / zoomIn / zoomOut /
- * setZoom / zoomFit, keyboard navigation, IntersectionObserver page tracking,
- * ResizeObserver for fit-to-width re-scale.
+ * In edit mode, an interactive text overlay is placed over each page canvas
+ * so users can click and edit text blocks in-place.
+ *
+ * Public API mirrors DocxViewer exactly:
+ *   goTo / next / prev / zoomIn / zoomOut / setZoom / zoomFit
+ *   setEditable / editMode (edit-specific)
  */
 import type { PdfDocument } from '../document/document.js';
 import type { PdfPage } from '../model.js';
+import { PdfEditController } from '../edit/editing.js';
+import type { PdfEditOp } from '../model.js';
 
 export interface PdfViewerOptions {
   startIndex?: number;
@@ -16,6 +21,10 @@ export interface PdfViewerOptions {
   keyboard?: boolean;
   /** Called whenever the most-visible page changes. */
   onChange?: (index: number, count: number) => void;
+  /** Called whenever the user commits an edit. */
+  onEdit?: (op: PdfEditOp) => void;
+  /** Called when edit mode is toggled. */
+  onEditModeChange?: (enabled: boolean) => void;
 }
 
 const SIDEBAR_W = 112;
@@ -34,16 +43,25 @@ export class PdfViewer {
   private readonly thumbContainers: HTMLElement[] = [];
   private readonly zoomLabel: HTMLSpanElement;
   private readonly onChange: PdfViewerOptions['onChange'];
+  private readonly onEdit: PdfViewerOptions['onEdit'];
+  private readonly onEditModeChange: PdfViewerOptions['onEditModeChange'];
+
   private index = 0;
-  private userZoom: number | null = null; // null = fit-to-width
+  private userZoom: number | null = null;
   private resizeObserver: ResizeObserver | null = null;
   private intersectionObserver: IntersectionObserver | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
+
+  private readonly formatSlotEl: HTMLDivElement;
+  private editController: PdfEditController | null = null;
+  private _editMode = false;
 
   constructor(doc: PdfDocument, container: HTMLElement, options: PdfViewerOptions = {}) {
     this.doc = doc;
     this.container = container;
     if (options.onChange) this.onChange = options.onChange;
+    if (options.onEdit)   this.onEdit   = options.onEdit;
+    if (options.onEditModeChange) this.onEditModeChange = options.onEditModeChange;
 
     container.style.position = 'relative';
 
@@ -52,21 +70,24 @@ export class PdfViewer {
     shell.style.cssText = 'position:absolute;inset:0;display:flex;overflow:hidden;';
     container.appendChild(shell);
 
-    // ── Main column (toolbar + scroll area) ───────────────────────────────
+    // ── Main column ───────────────────────────────────────────────────────
     const mainCol = document.createElement('div');
     mainCol.style.cssText = 'flex:1;min-width:0;display:flex;flex-direction:column;overflow:hidden;';
     shell.appendChild(mainCol);
 
-    // ── Zoom toolbar ──────────────────────────────────────────────────────
+    // ── Toolbar ───────────────────────────────────────────────────────────
     const toolbar = document.createElement('div');
     toolbar.style.cssText = [
-      'display:flex', 'align-items:center', 'justify-content:center',
+      'display:flex', 'align-items:center',
       'gap:4px', 'padding:5px 12px', 'background:#1e1e1e',
       'border-bottom:1px solid #333', 'flex-shrink:0', 'user-select:none',
     ].join(';');
     mainCol.appendChild(toolbar);
 
-    const styleBtn = (btn: HTMLButtonElement) => {
+    const mkBtn = (text: string, title: string): HTMLButtonElement => {
+      const btn = document.createElement('button');
+      btn.textContent = text;
+      btn.title = title;
       btn.style.cssText = [
         'background:#2e2e2e', 'border:1px solid #444', 'border-radius:4px',
         'color:#ddd', 'cursor:pointer', 'font-size:14px', 'line-height:1',
@@ -74,12 +95,10 @@ export class PdfViewer {
       ].join(';');
       btn.addEventListener('mouseover', () => { btn.style.background = '#3a3a3a'; });
       btn.addEventListener('mouseout',  () => { btn.style.background = '#2e2e2e'; });
+      return btn;
     };
 
-    const zoomOutBtn = document.createElement('button');
-    zoomOutBtn.textContent = '−';
-    zoomOutBtn.title = 'Zoom out';
-    styleBtn(zoomOutBtn);
+    const zoomOutBtn = mkBtn('−', 'Zoom out');
     zoomOutBtn.addEventListener('click', () => { this.zoomOut(); });
 
     this.zoomLabel = document.createElement('span');
@@ -88,19 +107,36 @@ export class PdfViewer {
       'cursor:pointer', 'padding:2px 4px', 'border-radius:3px',
     ].join(';');
     this.zoomLabel.title = 'Reset to fit width';
-    this.zoomLabel.addEventListener('click',      () => { this.zoomFit(); });
-    this.zoomLabel.addEventListener('mouseover',  () => { this.zoomLabel.style.background = '#2e2e2e'; });
-    this.zoomLabel.addEventListener('mouseout',   () => { this.zoomLabel.style.background = 'transparent'; });
+    this.zoomLabel.addEventListener('click',     () => { this.zoomFit(); });
+    this.zoomLabel.addEventListener('mouseover', () => { this.zoomLabel.style.background = '#2e2e2e'; });
+    this.zoomLabel.addEventListener('mouseout',  () => { this.zoomLabel.style.background = 'transparent'; });
 
-    const zoomInBtn = document.createElement('button');
-    zoomInBtn.textContent = '+';
-    zoomInBtn.title = 'Zoom in';
-    styleBtn(zoomInBtn);
+    const zoomInBtn = mkBtn('+', 'Zoom in');
     zoomInBtn.addEventListener('click', () => { this.zoomIn(); });
 
     toolbar.appendChild(zoomOutBtn);
     toolbar.appendChild(this.zoomLabel);
     toolbar.appendChild(zoomInBtn);
+
+    // ── Formatting slot (font / colour controls appear here when editing) ──
+    const fmtSep = document.createElement('div');
+    fmtSep.style.cssText = 'width:1px;height:16px;background:#444;margin:0 6px;flex-shrink:0;';
+    toolbar.appendChild(fmtSep);
+
+    this.formatSlotEl = document.createElement('div');
+    this.formatSlotEl.style.cssText = [
+      'flex:1', 'min-width:0', 'display:flex', 'align-items:center',
+      'overflow-x:auto', 'overflow-y:visible',
+      'scrollbar-width:thin', 'scrollbar-color:#444 transparent',
+    ].join(';');
+    // Convert vertical wheel into horizontal scroll so the toolbar is scrollable via mouse wheel.
+    this.formatSlotEl.addEventListener('wheel', (e: WheelEvent) => {
+      if (e.deltaY !== 0) {
+        e.preventDefault();
+        this.formatSlotEl.scrollLeft += e.deltaY;
+      }
+    }, { passive: false });
+    toolbar.appendChild(this.formatSlotEl);
 
     // ── Scroll area ───────────────────────────────────────────────────────
     this.scrollEl = document.createElement('div');
@@ -116,9 +152,7 @@ export class PdfViewer {
     ].join(';');
     shell.appendChild(this.sidebarEl);
 
-    // ── Build page placeholders and kick off async rendering ──────────────
     this.buildPages();
-
     this.applyZoom();
     this.updateActiveThumb(0);
 
@@ -135,6 +169,55 @@ export class PdfViewer {
     if (start > 0) requestAnimationFrame(() => { this.goTo(start); });
 
     this.onChange?.(0, this.count);
+
+    this.doc.onChange = () => {
+      if (this.editController) this.editController.refreshAll();
+    };
+  }
+
+  // ── Edit mode ─────────────────────────────────────────────────────────────
+
+  get editMode(): boolean { return this._editMode; }
+
+  /**
+   * Enable or disable in-place text editing.
+   * On first enable, loads the text layer from the document (async).
+   */
+  setEditable(enabled: boolean): void {
+    if (enabled === this._editMode) return;
+    this._editMode = enabled;
+
+    if (enabled) {
+      this.mountEditOverlay().catch(err => {
+        console.error('[PdfViewer] Failed to load text layer for editing:', err);
+      });
+    } else {
+      if (this.editController) this.editController.setEditable(false);
+      this.formatSlotEl.innerHTML = '';
+    }
+
+    this.onEditModeChange?.(enabled);
+  }
+
+  private async mountEditOverlay(): Promise<void> {
+    await this.doc.loadAllTextBlocks();
+
+    if (!this.editController) {
+      this.editController = new PdfEditController(
+        this.pageContainers,
+        this.doc.textBlocks,
+        this.doc.editsMap,
+        this.doc.annotationsMap,
+        this.doc.blockStylesMap,
+        (ops) => {
+          this.doc.applyEdits(ops);
+          for (const op of ops) this.onEdit?.(op);
+        },
+        this.formatSlotEl,
+      );
+    }
+
+    this.editController.setEditable(true);
   }
 
   // ── Page + thumbnail construction ─────────────────────────────────────────
@@ -143,13 +226,12 @@ export class PdfViewer {
     for (let i = 0; i < this.doc.pages.length; i++) {
       const page = this.doc.pages[i] as PdfPage;
 
-      // ── Main page container (white placeholder, correct natural dimensions) ─
       const pageContainer = document.createElement('div');
       pageContainer.dataset.pageIndex = String(i);
       pageContainer.style.cssText = [
         `width:${page.widthPx}px`, `height:${page.heightPx}px`,
         'background:#fff', 'box-shadow:0 2px 8px rgba(0,0,0,0.4)',
-        'position:relative', 'overflow:hidden',
+        'position:relative', 'overflow:visible',
       ].join(';');
 
       const wrapper = document.createElement('div');
@@ -158,11 +240,13 @@ export class PdfViewer {
       this.scrollEl.appendChild(wrapper);
       this.pageContainers.push(pageContainer);
 
-      // Render at 2× for retina; CSS size = natural page dimensions.
+      // Async canvas render
       this.doc.renderPage(i, RENDER_SCALE)
         .then((canvas) => {
           canvas.style.width  = `${page.widthPx}px`;
           canvas.style.height = `${page.heightPx}px`;
+          canvas.style.position = 'absolute';
+          canvas.style.inset = '0';
           pageContainer.appendChild(canvas);
         })
         .catch(() => {
@@ -173,7 +257,7 @@ export class PdfViewer {
           pageContainer.textContent = `Failed to render page ${i + 1}`;
         });
 
-      // ── Thumbnail ─────────────────────────────────────────────────────────
+      // Thumbnail
       const thumbScale = THUMB_W / page.widthPx;
       const thumbH = Math.round(page.heightPx * thumbScale);
 
@@ -185,15 +269,14 @@ export class PdfViewer {
       ].join(';');
       thumb.title = `Page ${i + 1}`;
 
-      // Render thumb at a scale that produces exactly THUMB_W × thumbH pixels.
-      const thumbRenderScale = thumbScale * 1.5; // 1.5× for acceptable sharpness
+      const thumbRenderScale = thumbScale * 1.5;
       this.doc.renderPage(i, thumbRenderScale)
         .then((canvas) => {
           canvas.style.width  = `${THUMB_W}px`;
           canvas.style.height = `${thumbH}px`;
           thumb.appendChild(canvas);
         })
-        .catch(() => { /* non-critical — placeholder background suffices */ });
+        .catch(() => { /* non-critical */ });
 
       const label = document.createElement('div');
       label.textContent = String(i + 1);
@@ -248,24 +331,25 @@ export class PdfViewer {
 
   private currentZoomValue(): number {
     if (this.userZoom !== null) return this.userZoom;
-    const cw = this.container.clientWidth - SIDEBAR_W;
-    const page = this.doc.pages[0];
-    const pageW = page ? page.widthPx : 595;
-    return cw > 0 ? (cw - 48) / pageW : 1;
+    const cw   = this.container.clientWidth - SIDEBAR_W;
+    const ch   = this.scrollEl.clientHeight;
+    const page = this.doc.pages[0] as PdfPage | undefined;
+    if (!page || cw <= 0) return 1;
+    const zoomW = (cw - 48) / page.widthPx;
+    // Use height-fit only when the scroll area has a meaningful height.
+    const zoomH = ch > 56 ? (ch - 56) / page.heightPx : zoomW;
+    return Math.min(zoomW, zoomH);
   }
 
   private applyZoom(): void {
     const cw = this.container.clientWidth - SIDEBAR_W;
     if (cw <= 0) return;
-
-    for (let i = 0; i < this.pageContainers.length; i++) {
-      const container = this.pageContainers[i] as HTMLElement;
-      const page = this.doc.pages[i] as PdfPage;
-      const zoom = this.userZoom !== null ? this.userZoom : (cw - 48) / page.widthPx;
-      (container.style as CSSStyleDeclaration & { zoom: string }).zoom = String(zoom);
+    // Use a single consistent zoom level (derived from the first page) for all pages.
+    const zoom = this.currentZoomValue();
+    for (const cont of this.pageContainers) {
+      (cont.style as CSSStyleDeclaration & { zoom: string }).zoom = String(zoom);
     }
-
-    this.zoomLabel.textContent = `${Math.round(this.currentZoomValue() * 100)}%`;
+    this.zoomLabel.textContent = `${Math.round(zoom * 100)}%`;
   }
 
   private updateActiveThumb(idx: number): void {
@@ -307,6 +391,8 @@ export class PdfViewer {
   private enableKeyboard(): void {
     if (this.container.tabIndex < 0) this.container.tabIndex = 0;
     this.keyHandler = (e: KeyboardEvent) => {
+      // Don't intercept keys while the user is typing in an edit overlay.
+      if ((e.target as HTMLElement).isContentEditable) return;
       switch (e.key) {
         case 'ArrowDown': case 'PageDown': case ' ':
           e.preventDefault(); this.next(); break;
@@ -317,12 +403,20 @@ export class PdfViewer {
         case '+': case '=': e.preventDefault(); this.zoomIn(); break;
         case '-':           e.preventDefault(); this.zoomOut(); break;
         case '0':           e.preventDefault(); this.zoomFit(); break;
+        case 'z':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault();
+            if (e.shiftKey) this.doc.redo(); else this.doc.undo();
+          }
+          break;
       }
     };
     this.container.addEventListener('keydown', this.keyHandler);
   }
 
   destroy(): void {
+    this.editController?.unmount();
+    this.doc.onChange = undefined;
     this.resizeObserver?.disconnect();
     this.intersectionObserver?.disconnect();
     if (this.keyHandler) this.container.removeEventListener('keydown', this.keyHandler);

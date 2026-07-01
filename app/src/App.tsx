@@ -1,6 +1,8 @@
 import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { PptxViewer, DocxViewer, PdfViewer } from '@pptx-viewer/react';
+import type { PdfViewerHandle } from '@pptx-viewer/react';
+import { InMemoryPdfVersionStore } from '@pptx-viewer/core';
 
 const PptxReactViewerWrap = lazy(() => import('./renderers/PptxReactViewerWrap'));
 const PptxViewJsWrap = lazy(() => import('./renderers/PptxViewJsWrap'));
@@ -71,6 +73,8 @@ export function App() {
   const [renderer, setRenderer] = useState<RendererId>('mine');
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+  const pdfViewerRef = useRef<PdfViewerHandle>(null);
+  const [pdfVersionStore] = useState(() => new InMemoryPdfVersionStore());
 
   const accept = useCallback((f: File | undefined) => {
     if (!f) return;
@@ -221,7 +225,18 @@ export function App() {
 
             {/* PDF renderer */}
             {mode === 'pdf' && renderer === 'mine-pdf' && (
-              <PdfViewer key={`pdf:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+              <PdfViewer
+                key={`pdf:${file.name}`}
+                ref={pdfViewerRef}
+                src={file}
+                style={{ flex: 1, minHeight: 0 }}
+                editable
+                versionStore={pdfVersionStore}
+                onVersionSaved={() => {
+                  const versions = pdfVersionStore.list();
+                  console.info(`[PDF] Version saved. Total versions: ${versions.length}`);
+                }}
+              />
             )}
           </Suspense>
         ) : (

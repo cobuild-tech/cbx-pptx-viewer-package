@@ -62,7 +62,8 @@ export async function loadPdf(data: ArrayBuffer | Uint8Array): Promise<PdfDocume
   return PdfDocument.load(data);
 }
 
-export type { PdfPage } from './pdf/model.js';
+export type { PdfPage, PdfTextItem, PdfTextBlock, PdfEditOp } from './pdf/model.js';
+export { InMemoryPdfVersionStore, type PdfVersionStore, type PdfVersion } from './pdf/edit/versions.js';
 
 // ─── Shared low-level building blocks ────────────────────────────────────────
 export { OpcPackage, type Relationship } from './oxml/package.js';
