@@ -53,6 +53,19 @@ export type {
   DocxPageMargins,
 } from './docx/model.js';
 
+// ─── PDF ─────────────────────────────────────────────────────────────────────
+export { PdfDocument } from './pdf/document/document.js';
+export { PdfViewer, createPdfViewer, type PdfViewerOptions } from './pdf/viewer/viewer.js';
+
+import { PdfDocument } from './pdf/document/document.js';
+/** Load a .pdf from raw bytes into a renderable {@link PdfDocument}. */
+export async function loadPdf(data: ArrayBuffer | Uint8Array): Promise<PdfDocument> {
+  return PdfDocument.load(data);
+}
+
+export type { PdfPage, PdfTextItem, PdfTextBlock, PdfEditOp } from './pdf/model.js';
+export { InMemoryPdfVersionStore, type PdfVersionStore, type PdfVersion } from './pdf/edit/versions.js';
+
 // ─── Shared low-level building blocks ────────────────────────────────────────
 export { OpcPackage, type Relationship } from './oxml/package.js';
 export { RelType } from './pptx/relTypes.js';
