@@ -5,7 +5,7 @@ export default defineConfig({
   resolve: {
     alias: {
       // Develop the demo directly against core's TypeScript source (no build step).
-      '@pptx-viewer/core': resolve(__dirname, '../packages/core/src/index.ts'),
+      '@cobuild-tech/pptx-viewer-core': resolve(__dirname, '../packages/core/src/index.ts'),
     },
   },
 });
