@@ -8,8 +8,9 @@ import { child, children, attr, attrNum, localName, type XmlNode } from '../../o
 import { twipsToPx, borderSzToPx } from '../units.js';
 import type { DocxTable, DocxTableCell, DocxParagraph, Fill, Stroke } from '../model.js';
 import { parseParagraph, type ParagraphParseCtx } from '../paragraphs/paragraph.js';
+import { encodeNodeId } from '../edit/nodeId.js';
 
-export function parseTable(tblEl: XmlNode, ctx: ParagraphParseCtx): DocxTable {
+export function parseTable(tblEl: XmlNode, ctx: ParagraphParseCtx, path?: number[]): DocxTable {
   // Column widths from <w:tblGrid>.
   const tblGrid = child(tblEl, 'tblGrid');
   const colWidths: number[] = [];
@@ -35,10 +36,16 @@ export function parseTable(tblEl: XmlNode, ctx: ParagraphParseCtx): DocxTable {
   const numCols = colWidths.length;
   const rawRows: RawCell[][] = [];
 
-  for (const trEl of children(tblEl, 'tr')) {
+  // Indexed iteration (not children()) so cell paths use real XML child indices.
+  for (let trIdx = 0; trIdx < tblEl.children.length; trIdx++) {
+    const trEl = tblEl.children[trIdx]!;
+    if (localName(trEl.name) !== 'tr') continue;
     const rawRow: RawCell[] = [];
-    for (const tcEl of children(trEl, 'tc')) {
-      rawRow.push(parseRawCell(tcEl, ctx, defaultCellPadding));
+    for (let tcIdx = 0; tcIdx < trEl.children.length; tcIdx++) {
+      const tcEl = trEl.children[tcIdx]!;
+      if (localName(tcEl.name) !== 'tc') continue;
+      const cellPath = path ? [...path, trIdx, tcIdx] : undefined;
+      rawRow.push(parseRawCell(tcEl, ctx, defaultCellPadding, cellPath));
     }
     rawRows.push(rawRow);
   }
@@ -169,6 +176,7 @@ function parseRawCell(
   tcEl: XmlNode,
   ctx: ParagraphParseCtx,
   defaultCellPadding: { top: number; right: number; bottom: number; left: number } | undefined,
+  path?: number[],
 ): RawCell {
   const tcPr = child(tcEl, 'tcPr');
 
@@ -190,10 +198,11 @@ function parseRawCell(
 
   // Parse cell content (paragraphs only for now).
   const content: DocxParagraph[] = [];
-  for (const node of tcEl.children) {
-    const name = localName(node.name);
-    if (name === 'p') {
-      const { paragraphs } = parseParagraph(node, ctx);
+  for (let i = 0; i < tcEl.children.length; i++) {
+    const node = tcEl.children[i]!;
+    if (localName(node.name) === 'p') {
+      const pPath = path ? [...path, i] : undefined;
+      const { paragraphs } = parseParagraph(node, ctx, pPath);
       content.push(...paragraphs);
     }
   }
@@ -201,6 +210,7 @@ function parseRawCell(
   return {
     cell: {
       content,
+      nodeId: path && ctx.partPath ? encodeNodeId(ctx.partPath, path) : undefined,
       fill,
       rowSpan: 1,
       colSpan,

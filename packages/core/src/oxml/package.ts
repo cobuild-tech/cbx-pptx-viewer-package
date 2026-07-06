@@ -8,8 +8,8 @@
  * and relationship resolution. It is format-agnostic — no presentation/word
  * knowledge lives here.
  */
-import { unzipSync } from 'fflate';
-import { parseXml, children, attr, type XmlNode } from './xml.js';
+import { unzipSync, zipSync, strToU8 } from 'fflate';
+import { parseXml, serializeXml, children, attr, type XmlNode } from './xml.js';
 
 export interface Relationship {
   id: string;
@@ -60,6 +60,10 @@ export class OpcPackage {
   private readonly xmlCache = new Map<string, XmlNode | null>();
   private overrides = new Map<string, string>();
   private defaults = new Map<string, string>();
+  /** Overlay of parts whose raw bytes were replaced via setPart(). */
+  private readonly edited = new Map<string, Uint8Array>();
+  /** Parts whose cached XmlNode was mutated in place; re-serialized on export. */
+  private readonly dirty = new Set<string>();
 
   private constructor(files: Record<string, Uint8Array>) {
     this.files = files;
@@ -74,12 +78,14 @@ export class OpcPackage {
 
   /** True if the package contains the given part. */
   has(partPath: string): boolean {
-    return normalizePath(partPath) in this.files;
+    const norm = normalizePath(partPath);
+    return norm in this.files || this.edited.has(norm);
   }
 
-  /** Raw bytes of a part, or undefined if absent. */
+  /** Raw bytes of a part, or undefined if absent. Edited overlay wins. */
   getBytes(partPath: string): Uint8Array | undefined {
-    return this.files[normalizePath(partPath)];
+    const norm = normalizePath(partPath);
+    return this.edited.get(norm) ?? this.files[norm];
   }
 
   /** UTF-8 text of a part, or undefined if absent. */
@@ -96,6 +102,93 @@ export class OpcPackage {
     const node = text ? parseXml(text) : null;
     this.xmlCache.set(key, node);
     return node ?? undefined;
+  }
+
+  // ─── Write-back (editing & export) ──────────────────────────────────────────
+
+  /**
+   * Replace a part's raw content with a UTF-8 string (e.g. serialized XML) or
+   * raw bytes. Invalidates any cached parse so the next getXml re-parses the new
+   * content. Used by version restore and direct part swaps.
+   */
+  setPart(partPath: string, data: string | Uint8Array): void {
+    const norm = normalizePath(partPath);
+    this.edited.set(norm, typeof data === 'string' ? strToU8(data) : data);
+    this.xmlCache.delete(norm);
+    this.dirty.delete(norm);
+    this.relsCache.clear(); // rels resolution may depend on the replaced part
+  }
+
+  /**
+   * Mark a part's cached XmlNode as mutated in place, so export re-serializes it.
+   * The edit layer calls this after mutating a node returned by getXml().
+   */
+  markDirty(partPath: string): void {
+    this.dirty.add(normalizePath(partPath));
+  }
+
+  /** True if any part has been edited (mutated node or replaced bytes). */
+  get hasEdits(): boolean {
+    return this.dirty.size > 0 || this.edited.size > 0;
+  }
+
+  /** Part paths that differ from the originally-loaded package. */
+  editedParts(): string[] {
+    return [...new Set<string>([...this.dirty, ...this.edited.keys()])];
+  }
+
+  /** Revert a part to its originally-loaded bytes (drops edits and re-parses). */
+  resetPart(partPath: string): void {
+    const norm = normalizePath(partPath);
+    this.edited.delete(norm);
+    this.dirty.delete(norm);
+    this.xmlCache.delete(norm);
+    this.relsCache.clear();
+  }
+
+  /**
+   * Current XML text of a part: re-serialized from its mutated node if dirty,
+   * else its (possibly replaced) raw text. Used to snapshot versions.
+   */
+  serializePart(partPath: string): string | undefined {
+    const norm = normalizePath(partPath);
+    if (this.dirty.has(norm)) {
+      const node = this.xmlCache.get(norm);
+      if (node) return serializeXml(node);
+    }
+    return this.getText(norm);
+  }
+
+  /**
+   * Re-zip into a valid OOXML byte stream. Dirty parts are re-serialized from
+   * their mutated nodes; every other part is emitted from its original (or
+   * replaced) bytes unchanged — structure is preserved everywhere untouched.
+   */
+  toBytes(): Uint8Array {
+    const out: Record<string, Uint8Array> = {};
+    const names = new Set<string>([...Object.keys(this.files), ...this.edited.keys()]);
+    for (const name of names) {
+      if (this.dirty.has(name)) {
+        const node = this.xmlCache.get(name);
+        if (node) {
+          out[name] = strToU8(serializeXml(node));
+          continue;
+        }
+      }
+      const bytes = this.edited.get(name) ?? this.files[name];
+      if (bytes) out[name] = bytes;
+    }
+    return zipSync(out);
+  }
+
+  /** Re-zip into a Blob (browser / Node 18+). */
+  toBlob(
+    type = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  ): Blob {
+    if (typeof Blob === 'undefined') {
+      throw new Error('Blob is not available in this environment.');
+    }
+    return new Blob([this.toBytes() as BlobPart], { type });
   }
 
   /** All part paths in the package, sorted. */

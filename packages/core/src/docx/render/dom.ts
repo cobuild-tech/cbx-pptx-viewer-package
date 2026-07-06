@@ -15,7 +15,7 @@ import type {
   DocxTable,
   DocxTableCell,
   DocxInlineImage,
-  TextRun,
+  DocxRun,
   Fill,
   Stroke,
   Bullet,
@@ -121,6 +121,7 @@ export function renderBlock(block: DocxBlock, deps: RenderDeps): HTMLElement | n
 function renderParagraph(para: DocxParagraph, deps: RenderDeps): HTMLDivElement {
   const el = document.createElement('div');
   el.className = `docx-para docx-style-${cssClass(para.styleName)}`;
+  if (para.nodeId) el.dataset.docxId = para.nodeId;
 
   applyParagraphStyles(el, para);
 
@@ -214,11 +215,12 @@ function applyParagraphStyles(el: HTMLElement, para: DocxParagraph): void {
 
 // ─── Run ──────────────────────────────────────────────────────────────────────
 
-function renderRun(run: TextRun): HTMLElement {
+function renderRun(run: DocxRun): HTMLElement {
   const el = run.hyperlink
     ? document.createElement('a')
     : document.createElement('span');
   el.className = 'docx-run';
+  if (run.nodeId) el.dataset.docxId = run.nodeId;
 
   if (run.text.includes('\n') || run.text.includes('\t')) {
     const parts = run.text.split(/(\n|\t)/);
@@ -228,6 +230,7 @@ function renderRun(run: TextRun): HTMLElement {
       } else if (part === '\t') {
         // Approximate Word's 0.5-inch default tab stop
         const tab = document.createElement('span');
+        tab.className = 'docx-tab';
         tab.style.display = 'inline-block';
         tab.style.minWidth = '48px';
         el.appendChild(tab);
@@ -253,7 +256,7 @@ function renderRun(run: TextRun): HTMLElement {
   return el;
 }
 
-function applyRunStyles(el: HTMLElement, run: TextRun): void {
+function applyRunStyles(el: HTMLElement, run: DocxRun): void {
   if (run.bold) el.style.fontWeight = 'bold';
   if (run.italic) el.style.fontStyle = 'italic';
   if (run.underline) el.style.textDecoration = 'underline';
@@ -306,6 +309,7 @@ function renderDocxTable(table: DocxTable, deps: RenderDeps): HTMLTableElement {
 function renderTableCell(cell: DocxTableCell, deps: RenderDeps): HTMLTableCellElement {
   const td = document.createElement('td');
   td.className = 'docx-cell';
+  if (cell.nodeId) td.dataset.docxId = cell.nodeId;
   if (cell.colSpan > 1) td.colSpan = cell.colSpan;
   if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
 
@@ -345,6 +349,7 @@ function renderTableCell(cell: DocxTableCell, deps: RenderDeps): HTMLTableCellEl
 function renderInlineImageBlock(image: DocxInlineImage, deps: RenderDeps): HTMLElement {
   const wrapper = document.createElement('div');
   wrapper.className = 'docx-image';
+  if (image.nodeId) wrapper.dataset.docxId = image.nodeId;
   wrapper.style.display = 'block';
 
   const url = deps.imageUrl(image.part);
