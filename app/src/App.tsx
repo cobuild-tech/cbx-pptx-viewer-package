@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
-import { PptxViewer } from '@pptx-viewer/react';
-import { DocxViewer } from '@pptx-viewer/react';
+import { PptxViewer } from '@cobuild-tech/pptx-viewer-react';
+import { DocxViewer } from '@cobuild-tech/pptx-viewer-react';
 
 const PptxReactViewerWrap = lazy(() => import('./renderers/PptxReactViewerWrap'));
 const PptxViewJsWrap = lazy(() => import('./renderers/PptxViewJsWrap'));

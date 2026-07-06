@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import { DocxViewer as DocxViewerCore, type DocxDocument } from '@pptx-viewer/core';
+import { DocxViewer as DocxViewerCore, type DocxDocument } from '@cobuild-tech/pptx-viewer-core';
 import { useDocument, type DocxSource } from './useDocument.js';
 
 export interface DocxViewerHandle {

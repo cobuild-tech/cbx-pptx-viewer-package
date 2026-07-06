@@ -1,5 +1,5 @@
 /**
- * @pptx-viewer/core — framework-agnostic .pptx and .docx parser and DOM renderer.
+ * @cobuild-tech/pptx-viewer-core — framework-agnostic .pptx and .docx parser and DOM renderer.
  *
  * PPTX pipeline: read (OPC) -> parse (XML -> model) -> resolve (inheritance) -> render (DOM)
  * DOCX pipeline: read (OPC) -> parse (XML -> model) -> paginate (sections) -> render (DOM)

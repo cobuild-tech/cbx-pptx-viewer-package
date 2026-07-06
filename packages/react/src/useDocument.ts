@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { loadDocx, type DocxDocument } from '@pptx-viewer/core';
+import { loadDocx, type DocxDocument } from '@cobuild-tech/pptx-viewer-core';
 
 export type DocxSource = File | ArrayBuffer | Uint8Array | null | undefined;
 

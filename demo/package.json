@@ -9,7 +9,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@pptx-viewer/core": "*"
+    "@cobuild-tech/pptx-viewer-core": "*"
   },
   "devDependencies": {
     "typescript": "^5.7.2",

@@ -11,8 +11,8 @@
   },
   "dependencies": {
     "@cyntler/react-doc-viewer": "^1.17.1",
-    "@pptx-viewer/core": "*",
-    "@pptx-viewer/react": "*",
+    "@cobuild-tech/pptx-viewer-core": "*",
+    "@cobuild-tech/pptx-viewer-react": "*",
     "chart.js": "^4.5.1",
     "fast-xml-parser": "^5.9.1",
     "framer-motion": "^12.40.0",

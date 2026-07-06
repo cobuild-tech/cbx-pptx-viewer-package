@@ -1,6 +1,6 @@
 {
-  "name": "@pptx-viewer/react",
-  "version": "0.0.0",
+  "name": "@cobuild-tech/pptx-viewer-react",
+  "version": "0.1.0",
   "description": "React component wrapper for the .pptx viewer",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,12 +13,20 @@
     }
   },
   "files": ["dist"],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobuild-tech/cbx-pptx-viewer-package.git",
+    "directory": "packages/react"
+  },
   "scripts": {
     "build": "vite build",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@pptx-viewer/core": "*"
+    "@cobuild-tech/pptx-viewer-core": "^0.1.0"
   },
   "peerDependencies": {
     "react": ">=18",

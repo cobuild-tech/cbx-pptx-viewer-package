@@ -1,6 +1,6 @@
 {
-  "name": "@pptx-viewer/core",
-  "version": "0.0.0",
+  "name": "@cobuild-tech/pptx-viewer-core",
+  "version": "0.1.0",
   "description": "Framework-agnostic .pptx parser + DOM renderer",
   "type": "module",
   "main": "./dist/index.js",
@@ -13,6 +13,14 @@
     }
   },
   "files": ["dist"],
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cobuild-tech/cbx-pptx-viewer-package.git",
+    "directory": "packages/core"
+  },
   "scripts": {
     "build": "vite build",
     "test": "vitest run",
