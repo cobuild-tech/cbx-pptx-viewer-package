@@ -47,7 +47,7 @@ export function parseTextBody(
   return body;
 }
 
-function readAnchor(bodyPr: XmlNode | undefined): VerticalAnchor {
+export function readAnchor(bodyPr: XmlNode | undefined): VerticalAnchor {
   const a = attr(bodyPr, 'anchor');
   if (a === 'ctr') return 'ctr';
   if (a === 'b') return 'bottom';
