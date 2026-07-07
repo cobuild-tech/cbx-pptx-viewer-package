@@ -13,6 +13,8 @@ import { emuToPx } from '../../oxml/units.js';
 import type { Slide, SlideSize, EmbeddedFont } from '../model.js';
 import { buildSlide } from '../slides/slide.js';
 
+const UNDECODABLE_IMAGE_TYPES = new Set(['image/x-emf', 'image/x-wmf', 'image/emf', 'image/wmf']);
+
 export class Deck {
   readonly size: SlideSize;
   readonly slides: Slide[];
@@ -66,6 +68,10 @@ export class Deck {
     const bytes = this.pkg.getBytes(part);
     if (!bytes || typeof URL === 'undefined' || typeof Blob === 'undefined') return undefined;
     const type = this.pkg.contentType(part) ?? 'application/octet-stream';
+    // EMF/WMF are vector metafiles no browser can decode via <img>; loading them
+    // yields a broken-image box instead of nothing, which shows through crop/overflow
+    // clipping as stray artifacts. Skip so callers fall back to rendering nothing.
+    if (UNDECODABLE_IMAGE_TYPES.has(type)) return undefined;
     const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
     this.urlCache.set(part, url);
     return url;
