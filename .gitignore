@@ -6,3 +6,7 @@ demo/dist/
 
 # Local test decks
 *.pptx
+
+# Secrets — never commit
+.env
+.env.*
