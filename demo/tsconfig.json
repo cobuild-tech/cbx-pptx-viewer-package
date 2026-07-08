@@ -3,7 +3,7 @@
   "compilerOptions": {
     "noEmit": true,
     "paths": {
-      "@cobuild-tech/pptx-viewer-core": ["../packages/core/src/index.ts"]
+      "@cobuildx.ai/office-viewer": ["../packages/core/src/index.ts"]
     }
   },
   "include": ["src", "vite.config.ts"]

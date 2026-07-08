@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { loadPptx, type Deck } from '@cobuild-tech/pptx-viewer-core';
+import { loadPptx, type Deck } from '../index.js';
 
 export type DeckSource = File | ArrayBuffer | Uint8Array | null | undefined;
 

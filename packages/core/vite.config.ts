@@ -5,9 +5,15 @@ import dts from 'vite-plugin-dts';
 export default defineConfig({
   build: {
     lib: {
-      entry: resolve(__dirname, 'src/index.ts'),
+      entry: {
+        index: resolve(__dirname, 'src/index.ts'),
+        react: resolve(__dirname, 'src/react/index.ts'),
+      },
       formats: ['es'],
-      fileName: 'index',
+      fileName: (_format, entryName) => `${entryName}.js`,
+    },
+    rollupOptions: {
+      external: ['react', 'react-dom', 'react/jsx-runtime'],
     },
     sourcemap: true,
     target: 'es2022',

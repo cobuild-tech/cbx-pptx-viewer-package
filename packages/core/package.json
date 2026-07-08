@@ -1,7 +1,7 @@
 {
-  "name": "@cobuild-tech/pptx-viewer-core",
+  "name": "@cobuildx.ai/office-viewer",
   "version": "0.1.0",
-  "description": "Framework-agnostic .pptx parser + DOM renderer",
+  "description": "Renders .pptx and .docx files in the browser, with optional React bindings",
   "type": "module",
   "main": "./dist/index.js",
   "module": "./dist/index.js",
@@ -10,11 +10,15 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
     }
   },
   "files": ["dist"],
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "access": "public"
   },
   "repository": {
     "type": "git",
@@ -31,7 +35,19 @@
     "fflate": "^0.8.2",
     "fast-xml-parser": "^4.5.1"
   },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": { "optional": true },
+    "react-dom": { "optional": true }
+  },
   "devDependencies": {
+    "@types/react": "^19.0.2",
+    "@types/react-dom": "^19.0.2",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
     "typescript": "^5.7.2",
     "vite": "^6.0.7",
     "vite-plugin-dts": "^4.4.0",

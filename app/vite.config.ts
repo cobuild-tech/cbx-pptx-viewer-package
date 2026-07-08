@@ -7,8 +7,8 @@ export default defineConfig({
   resolve: {
     alias: {
       // Run against the packages' TypeScript source — no build step needed.
-      '@cobuild-tech/pptx-viewer-core': resolve(__dirname, '../packages/core/src/index.ts'),
-      '@cobuild-tech/pptx-viewer-react': resolve(__dirname, '../packages/react/src/index.ts'),
+      '@cobuildx.ai/office-viewer/react': resolve(__dirname, '../packages/core/src/react/index.ts'),
+      '@cobuildx.ai/office-viewer': resolve(__dirname, '../packages/core/src/index.ts'),
     },
   },
 });

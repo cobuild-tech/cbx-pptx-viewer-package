@@ -1,34 +1,34 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Viewer, type Deck } from '@cobuild-tech/pptx-viewer-core';
-import { useDeck, type DeckSource } from './useDeck.js';
+import { DocxViewer as DocxViewerCore, type DocxDocument } from '../index.js';
+import { useDocument, type DocxSource } from './useDocument.js';
 
-export interface PptxViewerHandle {
+export interface DocxViewerHandle {
   next(): void;
   prev(): void;
   goTo(index: number): void;
-  deck: Deck | null;
+  doc: DocxDocument | null;
 }
 
-export interface PptxViewerProps {
+export interface DocxViewerProps {
   /** A File (e.g. from an <input>), ArrayBuffer, or Uint8Array. */
-  src: DeckSource;
-  /** Show the built-in navigation toolbar. Default true. */
+  src: DocxSource;
+  /** Show the built-in page indicator toolbar. Default true. */
   toolbar?: boolean;
   className?: string;
   style?: CSSProperties;
-  onLoad?: (deck: Deck) => void;
+  onLoad?: (doc: DocxDocument) => void;
   onError?: (error: Error) => void;
-  onSlideChange?: (index: number, count: number) => void;
+  onPageChange?: (index: number, count: number) => void;
 }
 
-export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function PptxViewer(
-  { src, toolbar = true, className, style, onLoad, onError, onSlideChange },
+export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function DocxViewer(
+  { src, toolbar = true, className, style, onLoad, onError, onPageChange },
   ref,
 ) {
-  const { deck, loading, error } = useDeck(src);
+  const { doc, loading, error } = useDocument(src);
   const stageRef = useRef<HTMLDivElement>(null);
-  const viewerRef = useRef<Viewer | null>(null);
+  const viewerRef = useRef<DocxViewerCore | null>(null);
   const [index, setIndex] = useState(0);
   const [count, setCount] = useState(0);
 
@@ -37,13 +37,13 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
   }, [error, onError]);
 
   useEffect(() => {
-    if (!deck || !stageRef.current) return;
-    onLoad?.(deck);
-    const viewer = new Viewer(deck, stageRef.current, {
+    if (!doc || !stageRef.current) return;
+    onLoad?.(doc);
+    const viewer = new DocxViewerCore(doc, stageRef.current, {
       onChange: (i, c) => {
         setIndex(i);
         setCount(c);
-        onSlideChange?.(i, c);
+        onPageChange?.(i, c);
       },
     });
     viewerRef.current = viewer;
@@ -51,7 +51,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       viewer.destroy();
       viewerRef.current = null;
     };
-  }, [deck]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doc]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useImperativeHandle(
     ref,
@@ -59,33 +59,44 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       next: () => viewerRef.current?.next(),
       prev: () => viewerRef.current?.prev(),
       goTo: (i: number) => viewerRef.current?.goTo(i),
-      deck,
+      doc,
     }),
-    [deck],
+    [doc],
   );
 
   return (
     <div className={className} style={{ display: 'flex', flexDirection: 'column', ...style }}>
-      {/* The viewer fits the slide to this area (contain) and centres it. */}
-      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#525659' }}>
+      {/*
+        The viewer creates its own scroll container absolutely inside stageRef,
+        so stageRef must fill the remaining height (not auto-grow).
+      */}
+      <div style={{ flex: 1, minHeight: 0, position: 'relative', background: '#525659' }}>
         <div ref={stageRef} style={{ width: '100%', height: '100%' }} />
       </div>
+
       {loading && <div style={statusStyle}>Loading…</div>}
       {error && <div style={{ ...statusStyle, color: '#e57373' }}>Error: {error.message}</div>}
-      {toolbar && deck && (
+
+      {toolbar && doc && (
         <div style={toolbarStyle}>
-          <button style={btn} onClick={() => viewerRef.current?.prev()} disabled={index <= 0}>
-            ‹ Prev
+          <button
+            style={btn}
+            onClick={() => viewerRef.current?.prev()}
+            disabled={index <= 0}
+            title="Scroll to previous page"
+          >
+            ↑ Prev
           </button>
           <span style={{ minWidth: 90, textAlign: 'center' }}>
-            Slide {count === 0 ? 0 : index + 1} / {count}
+            Page {count === 0 ? 0 : index + 1} / {count}
           </span>
           <button
             style={btn}
             onClick={() => viewerRef.current?.next()}
             disabled={index >= count - 1}
+            title="Scroll to next page"
           >
-            Next ›
+            Next ↓
           </button>
         </div>
       )}
@@ -108,6 +119,7 @@ const toolbarStyle: CSSProperties = {
   background: '#2a2a2a',
   color: '#eee',
   font: '13px system-ui, sans-serif',
+  flexShrink: 0,
 };
 
 const btn: CSSProperties = {
