@@ -1,4 +1,4 @@
-import { OpcPackage, RelType } from '@cobuild-tech/pptx-viewer-core';
+import { OpcPackage, RelType } from '@cobuildx.ai/office-viewer';
 
 const dropEl = document.getElementById('drop')!;
 const infoEl = document.getElementById('info')!;

@@ -12,9 +12,9 @@
   "scripts": {
     "dev": "npm run dev --workspace app",
     "dev:inspector": "npm run dev --workspace demo",
-    "build": "npm run build --workspace @cobuild-tech/pptx-viewer-core && npm run build --workspace @cobuild-tech/pptx-viewer-react",
+    "build": "npm run build --workspace @cobuildx.ai/office-viewer",
     "build:app": "npm run build --workspace app",
-    "test": "npm run test --workspace @cobuild-tech/pptx-viewer-core",
-    "typecheck": "npm run typecheck --workspace @cobuild-tech/pptx-viewer-core && npm run typecheck --workspace @cobuild-tech/pptx-viewer-react && npm run typecheck --workspace app"
+    "test": "npm run test --workspace @cobuildx.ai/office-viewer",
+    "typecheck": "npm run typecheck --workspace @cobuildx.ai/office-viewer && npm run typecheck --workspace app"
   }
 }

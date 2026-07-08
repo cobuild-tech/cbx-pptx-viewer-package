@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Viewer, type Deck } from '@cobuild-tech/pptx-viewer-core';
+import { Viewer, type Deck } from '../index.js';
 import { useDeck, type DeckSource } from './useDeck.js';
 
 export interface PptxViewerHandle {

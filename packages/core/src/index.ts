@@ -1,5 +1,6 @@
 /**
- * @cobuild-tech/pptx-viewer-core — framework-agnostic .pptx and .docx parser and DOM renderer.
+ * @cobuildx.ai/office-viewer — framework-agnostic .pptx and .docx parser and DOM renderer.
+ * React bindings are available from '@cobuildx.ai/office-viewer/react'.
  *
  * PPTX pipeline: read (OPC) -> parse (XML -> model) -> resolve (inheritance) -> render (DOM)
  * DOCX pipeline: read (OPC) -> parse (XML -> model) -> paginate (sections) -> render (DOM)

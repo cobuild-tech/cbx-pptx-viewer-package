@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import type { CSSProperties } from 'react';
-import type { VersionMeta } from '@cobuild-tech/pptx-viewer-core';
+import type { VersionMeta } from '../index.js';
 
 export interface DocxEditorToolbarProps {
   canUndo: boolean;

@@ -5,7 +5,7 @@ import {
   type DocxDocument,
   type DocxVersionStore,
   type VersionMeta,
-} from '@cobuild-tech/pptx-viewer-core';
+} from '../index.js';
 import { useDocument, type DocxSource } from './useDocument.js';
 import { DocxEditorToolbar } from './DocxEditorToolbar.js';
 
