@@ -5,9 +5,12 @@ and **Word (`.docx`)** files directly in the browser, instead of converting them
 to PDF or images first. Documents render to real HTML/CSS, so text is
 selectable, hyperlinks work, and the output is accessible.
 
-> Status: **viewers work, read-only.** Editing is not yet implemented — the
-> architecture is built to grow toward it. See [Roadmap](#roadmap) and
-> [Extending the package](#extending-the-package).
+Published to npm as [`@cobuildx.ai/office-viewer`](https://www.npmjs.com/package/@cobuildx.ai/office-viewer).
+
+> Status: the **PPTX viewer is read-only**. The **DOCX viewer supports inline
+> editing** (undo/redo, run/paragraph formatting, table row insert/delete,
+> pluggable version snapshots, export back to `.docx`). See
+> [Roadmap](#roadmap) and [Extending the package](#extending-the-package).
 
 ## Why
 
@@ -47,22 +50,32 @@ This is an npm-workspaces monorepo:
 
 ```
 packages/
-  core/     @pptx-viewer/core  — framework-agnostic parsers + DOM renderers
-  react/    @pptx-viewer/react — <PptxViewer /> + <DocxViewer /> components & hooks
-app/        React app: upload a .pptx/.docx and view it (the main demo)
-demo/       Vanilla-TS inspector: dumps a package's parts/content-types
+  core/     @cobuildx.ai/office-viewer — the published package (source lives here)
+app/        React app: upload a .pptx/.docx and view it (installs the published
+            package from npm — the main demo of "does this work for a real consumer")
+demo/       Vanilla-TS inspector: dumps a package's parts/content-types (runs
+            directly against packages/core's TypeScript source, no build step)
 ```
 
-### `@pptx-viewer/core`
+`@cobuildx.ai/office-viewer` ships as a single npm package with two entry
+points, so non-React consumers never pull in React:
 
-The engine, organized as a **shared low-level layer + per-format feature
-slices**. Each format is self-contained and must not import another format's
-code; only `oxml/` is shared. (See [memory](#extending-the-package): *docx is a
-sibling of pptx and must never import pptx*.)
+| Entry | Contents |
+| --- | --- |
+| `@cobuildx.ai/office-viewer` | framework-agnostic: `loadPptx`/`loadDocx`, viewers, renderers, low-level OOXML building blocks |
+| `@cobuildx.ai/office-viewer/react` | `<PptxViewer />`, `<DocxViewer />`, `<DocxEditorToolbar />`, `useDeck`, `useDocument` |
+
+The engine itself is organized as a **shared low-level layer + per-format
+feature slices**. Each format is self-contained and must not import another
+format's code; only `oxml/` is shared. (See
+[Extending the package](#extending-the-package): *docx is a sibling of pptx and
+must never import pptx*.)
 
 ```
 packages/core/src/
   index.ts          public API: loadPptx / loadDocx, viewers, low-level exports
+  react/            React entry point (@cobuildx.ai/office-viewer/react)
+    PptxViewer.tsx  DocxViewer.tsx  DocxEditorToolbar.tsx  useDeck.ts  useDocument.ts
 
   oxml/             SHARED, format-agnostic
     package.ts      OPC: unzip, content types, relationship resolution
@@ -84,29 +97,28 @@ packages/core/src/
     document/       top-level loader; body parsing
     paragraphs/     paragraphs + runs
     styles/  numbering/  tables/  images/
+    edit/           edit ops, node addressing, version snapshots
     model.ts        DOCX page/block/paragraph/table model
     render/         model -> HTML/CSS (dom.ts), pagination-aware
-    viewer/         paginated scroll view + thumbnail strip
+    viewer/         paginated scroll view + thumbnail strip + inline editing
 ```
 
-### `@pptx-viewer/react`
-
-Thin React wrappers over the core viewers:
-
-| Export | What it is |
-| --- | --- |
-| `<PptxViewer />` | mounts the PPTX viewer; `next()`/`prev()`/`goTo()` via ref |
-| `useDeck()` | load a `.pptx` source into deck state |
-| `<DocxViewer />` | mounts the DOCX viewer; same ref controls |
-| `useDocument()` | load a `.docx` source into document state |
-
 ## Usage
+
+## Install
+
+```bash
+npm install @cobuildx.ai/office-viewer
+```
+
+React bindings additionally require `react` and `react-dom` (>=18) — they're
+an optional peer dependency, so plain-JS consumers never pull in React.
 
 ### React
 
 ```tsx
 import { useState } from 'react';
-import { PptxViewer, DocxViewer } from '@pptx-viewer/react';
+import { PptxViewer, DocxViewer } from '@cobuildx.ai/office-viewer/react';
 
 function App() {
   const [file, setFile] = useState<File | null>(null);
@@ -133,7 +145,7 @@ function App() {
 ### Framework-agnostic core
 
 ```ts
-import { loadPptx, createViewer, loadDocx, createDocxViewer } from '@pptx-viewer/core';
+import { loadPptx, createViewer, loadDocx, createDocxViewer } from '@cobuildx.ai/office-viewer';
 
 // PPTX
 const deck = loadPptx(arrayBuffer);
@@ -165,14 +177,19 @@ npm install
 npm run dev            # run the React app (app/) at http://localhost:5173
 npm run dev:inspector  # run the vanilla part-inspector (demo/)
 
-npm test               # run @pptx-viewer/core unit tests (vitest)
-npm run typecheck      # typecheck all workspaces
-npm run build          # build the core + react libraries
+npm test               # run @cobuildx.ai/office-viewer unit tests (vitest)
+npm run typecheck      # typecheck the package + app
+npm run build          # build the published package (packages/core)
 npm run build:app      # production build of the React app
 ```
 
-The app and demo are aliased directly to the packages' TypeScript source, so
-there's no build step while developing — edits to `core`/`react` hot-reload.
+`demo/` is aliased directly to `packages/core`'s TypeScript source, so there's
+no build step while developing it — edits hot-reload. `app/` is intentionally
+**not** aliased: it installs `@cobuildx.ai/office-viewer` from the real npm
+registry as an ordinary dependency, so it exercises the actual published
+package rather than local source. After changing `packages/core`, run
+`npm run build` there, bump its version, and republish before `app/` will pick
+up the change (or `npm link` locally if you want to iterate faster).
 
 ### Comparing renderers
 
@@ -181,7 +198,7 @@ file through this package or three third-party libraries, to compare fidelity:
 
 | Option | Package | Approach |
 | --- | --- | --- |
-| cbx-ppt-viewer (default) | `@pptx-viewer/react` | HTML/CSS DOM, this repo's parser |
+| cbx-ppt-viewer (default) | `@cobuildx.ai/office-viewer/react` | HTML/CSS DOM, this repo's parser |
 | pptx-react-viewer | [`pptx-react-viewer`](https://www.npmjs.com/package/pptx-react-viewer) | HTML/CSS, full editor (heavy deps) |
 | pptxviewjs | [`pptxviewjs`](https://www.npmjs.com/package/pptxviewjs) | `<canvas>` renderer |
 | @cyntler/react-doc-viewer | [`@cyntler/react-doc-viewer`](https://www.npmjs.com/package/@cyntler/react-doc-viewer) | embeds the MS Office Online viewer |
@@ -223,11 +240,15 @@ won't load there.
 - Tables (grid, cell borders/fills/text)
 - Inline images
 - Section-aware **pagination** (page size + margins), scroll view + thumbnails
+- **Inline WYSIWYG editing** (opt-in via `editable`): undo/redo, run/paragraph
+  formatting, table row insert/delete, pluggable version snapshots
+  (`DocxVersionStore`), export the edited document back to a `.docx` `Blob`
 
 ## Known limitations
 
-- **Read-only** — no editing yet (the model is intentionally render-agnostic to
-  make round-trip editing tractable later)
+- **PPTX is read-only** — no editing yet (the model is intentionally
+  render-agnostic to make round-trip editing tractable later, as it already is
+  for DOCX)
 - PPTX: only the implemented preset geometries are exact; the rest fall back to
   a rectangle
 - Image *fills* inside shapes don't yet apply `srcRect` cropping (standalone
@@ -264,15 +285,14 @@ without rewrites. Conventions to follow:
 
 ### Toward an editor
 
-The intended path: text-content editing with round-trip export back to the
-source XML (each model node keeps a link to its origin part), then shape
-move/resize/restyle. Because the model is already decoupled from both parsing
-and rendering, an editor becomes "mutate model → re-render → serialize," not a
-new pipeline.
+DOCX already proves the pattern out: edits mutate the render-agnostic model
+via `applyOp`, the DOM re-renders, and `exportBlob()` serializes back to a real
+`.docx`. Extending the same model → render → serialize loop to PPTX (text
+first, then shape move/resize/restyle) is the main remaining piece.
 
 ## Roadmap
 
-- Editing: text-content editing with round-trip export, then shape
+- PPTX editing: text-content editing with round-trip export, then shape
   move / resize / restyle
 - More PPTX preset geometries and effect mapping (CSS shadow / filter)
 - `srcRect` cropping for image fills inside shapes
