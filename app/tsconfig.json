@@ -2,11 +2,7 @@
   "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": true,
-    "jsx": "react-jsx",
-    "paths": {
-      "@cobuildx.ai/office-viewer": ["../packages/core/src/index.ts"],
-      "@cobuildx.ai/office-viewer/react": ["../packages/core/src/react/index.ts"]
-    }
+    "jsx": "react-jsx"
   },
   "include": ["src"]
 }
