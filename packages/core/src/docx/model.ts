@@ -121,6 +121,8 @@ export interface DocxTable {
   colWidths: number[];
   /** rows[r][c] — null for cells covered by a span. */
   rows: (DocxTableCell | null)[][];
+  /** Table indent in px from <w:tblInd> (negative pulls left into the margin). */
+  indentPx?: number;
 }
 
 export interface DocxTableCell {

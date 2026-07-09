@@ -88,7 +88,31 @@ export function parseTable(tbl: XmlNode, ctx: ParseContext): DocxTable {
   }
 
   const widthPx = grid.reduce((a, b) => a + b, 0) || undefined;
-  return { kind: 'table', colWidths: grid, rows, ...(widthPx ? { widthPx } : {}) };
+  const indentTwip = attrNum(child(tblPr, 'tblInd'), 'w');
+  const indentPx = indentTwip !== undefined ? twipToPx(indentTwip) : undefined;
+  return {
+    kind: 'table',
+    colWidths: grid,
+    rows,
+    ...(widthPx ? { widthPx } : {}),
+    ...(indentPx ? { indentPx } : {}),
+  };
+}
+
+/**
+ * Scale a table (and its column widths) down so it fits the available width,
+ * reproducing Word's autofit. A negative tblInd lets the table extend left into
+ * the margin, adding to the width it may occupy. Narrower tables are untouched.
+ */
+export function fitTableWidth(table: DocxTable, contentW: number): void {
+  const indent = table.indentPx ?? 0;
+  const avail = contentW - indent; // negative indent widens the available space
+  const natural = table.colWidths.reduce((a, b) => a + b, 0);
+  if (natural <= 0 || avail <= 0 || natural <= avail) return;
+
+  const scale = avail / natural;
+  table.colWidths = table.colWidths.map((w) => w * scale);
+  table.widthPx = avail;
 }
 
 /** The four border sides that apply to a cell from table-level borders. */

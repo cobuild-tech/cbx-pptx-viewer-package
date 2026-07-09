@@ -10,7 +10,7 @@ import { child, children, attr, attrNum, localName, type XmlNode } from '../../o
 import { twipToPx } from '../units.js';
 import { logicalChildren } from '../content.js';
 import { parseParagraph } from '../paragraphs/paragraph.js';
-import { parseTable } from '../tables/table.js';
+import { parseTable, fitTableWidth } from '../tables/table.js';
 import { collectFloats } from '../images/image.js';
 import type { DocxBlock, DocxFloat, DocxSection, DocxPageSize, DocxPageMargins } from '../model.js';
 import type { ParseContext } from './context.js';
@@ -33,6 +33,12 @@ export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
   const flush = (sectPr: XmlNode | undefined) => {
     const { size, margins } = readSectPr(sectPr);
     const hf = readHeaderFooter(sectPr, ctx, size, margins);
+    // Autofit top-level tables to the section's content width so oversized/pct
+    // tables don't overflow the right margin (Word scales them to fit).
+    const contentW = size.wPx - margins.leftPx - margins.rightPx;
+    for (const block of current) {
+      if (block.kind === 'table') fitTableWidth(block, contentW);
+    }
     sections.push({ index: sections.length, size, margins, blocks: current, ...hf });
     current = [];
   };

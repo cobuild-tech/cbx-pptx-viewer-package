@@ -275,6 +275,7 @@ function renderTable(
   t.style.borderCollapse = 'collapse';
   t.style.tableLayout = 'fixed';
   if (table.widthPx) t.style.width = px(table.widthPx);
+  if (table.indentPx) t.style.marginLeft = px(table.indentPx);
 
   if (table.colWidths.length) {
     const cg = document.createElement('colgroup');
@@ -310,7 +311,12 @@ function renderCell(
   if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
   const s = td.style;
   s.verticalAlign = cell.vAlign ?? 'top';
-  if (cell.fillHex) s.background = `#${cell.fillHex}`;
+  if (cell.fillHex) {
+    s.background = `#${cell.fillHex}`;
+    // Word's "automatic" font color flips to white on a dark fill for contrast.
+    // Set it as the cell default so explicit run/paragraph colors still win.
+    if (isDarkFill(cell.fillHex)) s.color = '#fff';
+  }
   if (cell.cellPaddingPx) {
     const p = cell.cellPaddingPx;
     s.padding = `${p.top}px ${p.right}px ${p.bottom}px ${p.left}px`;
@@ -378,6 +384,16 @@ function applyBorders(el: HTMLElement, borders: DocxParagraph['paraBorders']): v
 
 function strokeCss(stroke: Stroke): string {
   return `${Math.max(1, stroke.width)}px solid #${stroke.color.hex}`;
+}
+
+/** Perceived-luminance test for cell fills, to pick auto white/black text. */
+function isDarkFill(hex: string): boolean {
+  const h = hex.replace(/^#/, '');
+  if (h.length < 6) return false;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return 0.299 * r + 0.587 * g + 0.114 * b < 128;
 }
 
 /** Known serif families, so an uninstalled font falls back to the right generic. */
