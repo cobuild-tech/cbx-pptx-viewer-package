@@ -1,14 +1,21 @@
 /**
- * @cobuildx.ai/office-viewer — framework-agnostic .pptx parser and DOM renderer.
- * React bindings are available from '@cobuildx.ai/office-viewer/react'.
+ * @cobuildx.ai/office-viewer — framework-agnostic .pptx and .docx parser and
+ * DOM renderer. React bindings are available from
+ * '@cobuildx.ai/office-viewer/react'.
  *
  * PPTX pipeline: read (OPC) -> parse (XML -> model) -> resolve (inheritance) -> render (DOM)
+ * DOCX pipeline: read (OPC) -> parse (XML -> model) -> paginate (sections)    -> render (DOM)
  *
  * PPTX usage:
  *   const deck = loadPptx(arrayBuffer);
  *   const viewer = createViewer(deck, containerEl, { fit: 'contain' });
  *   viewer.next(); viewer.goTo(3);
  *   // when done: viewer.destroy(); deck.dispose();
+ *
+ * DOCX usage (read-only):
+ *   const doc = loadDocx(arrayBuffer);
+ *   const viewer = createDocxViewer(doc, containerEl, { fit: 'width' });
+ *   // when done: viewer.destroy(); doc.dispose();
  */
 
 // ─── PPTX ────────────────────────────────────────────────────────────────────
@@ -22,6 +29,33 @@ import { Deck } from './pptx/deck/deck.js';
 /** Load a .pptx from raw bytes into a renderable {@link Deck}. */
 export function loadPptx(data: ArrayBuffer | Uint8Array): Deck {
   return Deck.load(data);
+}
+
+// ─── DOCX ────────────────────────────────────────────────────────────────────
+export { DocxDocument } from './docx/document/document.js';
+export {
+  DocxViewer,
+  createDocxViewer,
+  type DocxViewerOptions,
+} from './docx/viewer/viewer.js';
+export { renderPage as renderDocxPage, type RenderDeps as DocxRenderDeps } from './docx/render/dom.js';
+export { DocxRelType } from './docx/relTypes.js';
+export type {
+  DocxPage,
+  DocxBlock,
+  DocxParagraph,
+  DocxTable,
+  DocxTableCell,
+  DocxInlineImage,
+  DocxRun,
+  DocxPageSize,
+  DocxPageMargins,
+} from './docx/model.js';
+
+import { DocxDocument } from './docx/document/document.js';
+/** Load a .docx from raw bytes into a renderable {@link DocxDocument}. */
+export function loadDocx(data: ArrayBuffer | Uint8Array): DocxDocument {
+  return DocxDocument.load(data);
 }
 
 // ─── Shared low-level building blocks ────────────────────────────────────────

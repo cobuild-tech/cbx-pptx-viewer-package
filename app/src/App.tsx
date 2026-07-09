@@ -1,12 +1,13 @@
 import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
-import { PptxViewer } from '@cobuildx.ai/office-viewer/react';
+import { PptxViewer, DocxViewer } from '@cobuildx.ai/office-viewer/react';
 
 const PptxReactViewerWrap = lazy(() => import('./renderers/PptxReactViewerWrap'));
 const PptxViewJsWrap = lazy(() => import('./renderers/PptxViewJsWrap'));
 const CyntlerViewerWrap = lazy(() => import('./renderers/CyntlerViewerWrap'));
 
 type RendererId = 'mine' | 'pptx-react-viewer' | 'pptxviewjs' | 'cyntler';
+type Kind = 'pptx' | 'docx';
 
 const PPTX_RENDERERS: { id: RendererId; label: string }[] = [
   { id: 'mine', label: 'cbx-ppt-viewer' },
@@ -16,16 +17,28 @@ const PPTX_RENDERERS: { id: RendererId; label: string }[] = [
 ];
 
 const PPTX_COLOR = '#c43b1c';
+const DOCX_COLOR = '#2b579a';
+
+function kindOf(name: string): Kind | null {
+  const n = name.toLowerCase();
+  if (n.endsWith('.pptx')) return 'pptx';
+  if (n.endsWith('.docx')) return 'docx';
+  return null;
+}
 
 export function App() {
   const [file, setFile] = useState<File | null>(null);
+  const [kind, setKind] = useState<Kind>('pptx');
   const [renderer, setRenderer] = useState<RendererId>('mine');
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const accept = useCallback((f: File | undefined) => {
-    if (!f || !f.name.toLowerCase().endsWith('.pptx')) return;
+    if (!f) return;
+    const k = kindOf(f.name);
+    if (!k) return;
     setFile(f);
+    setKind(k);
     setRenderer('mine');
   }, []);
 
@@ -38,25 +51,24 @@ export function App() {
     [accept],
   );
 
+  const accent = kind === 'docx' ? DOCX_COLOR : PPTX_COLOR;
+
   return (
     <div style={page}>
       {/* ── Header ─────────────────────────────────────────────────────────── */}
       <header style={header}>
         <div style={brand}>
-          <span style={{ fontSize: 18, lineHeight: 1 }}>📊</span>
+          <span style={{ fontSize: 18, lineHeight: 1 }}>📄</span>
           <strong style={{ fontSize: 14, letterSpacing: '-0.3px' }}>cbx viewer</strong>
         </div>
 
         <div style={divider} />
 
-        <button
-          style={{ ...uploadBtn, background: PPTX_COLOR }}
-          onClick={() => inputRef.current?.click()}
-        >
-          Upload .pptx
+        <button style={{ ...uploadBtn, background: accent }} onClick={() => inputRef.current?.click()}>
+          Upload .pptx / .docx
         </button>
 
-        {file && (
+        {file && kind === 'pptx' && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <span style={{ color: '#aaa' }}>Renderer:</span>
             <select
@@ -75,6 +87,7 @@ export function App() {
 
         {file && (
           <div style={fileChip}>
+            <span style={{ ...chipTag, background: accent }}>{kind.toUpperCase()}</span>
             <span style={{ color: '#ddd', maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
               {file.name}
             </span>
@@ -88,7 +101,7 @@ export function App() {
         <input
           ref={inputRef}
           type="file"
-          accept=".pptx"
+          accept=".pptx,.docx"
           style={{ display: 'none' }}
           onChange={(e) => accept(e.target.files?.[0])}
         />
@@ -98,31 +111,34 @@ export function App() {
       <main style={main}>
         {file ? (
           <Suspense fallback={<div style={loadingFallback}>Loading renderer…</div>}>
-            {renderer === 'mine' && (
+            {kind === 'docx' && (
+              <DocxViewer key={`docx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+            )}
+            {kind === 'pptx' && renderer === 'mine' && (
               <PptxViewer key={`pptx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
             )}
-            {renderer === 'pptx-react-viewer' && <PptxReactViewerWrap key={`prv:${file.name}`} file={file} />}
-            {renderer === 'pptxviewjs' && <PptxViewJsWrap key={`pvjs:${file.name}`} file={file} />}
-            {renderer === 'cyntler' && <CyntlerViewerWrap key={`cyn:${file.name}`} file={file} />}
+            {kind === 'pptx' && renderer === 'pptx-react-viewer' && <PptxReactViewerWrap key={`prv:${file.name}`} file={file} />}
+            {kind === 'pptx' && renderer === 'pptxviewjs' && <PptxViewJsWrap key={`pvjs:${file.name}`} file={file} />}
+            {kind === 'pptx' && renderer === 'cyntler' && <CyntlerViewerWrap key={`cyn:${file.name}`} file={file} />}
           </Suspense>
         ) : (
           <div style={dropWrapper}>
             <div
               style={{
                 ...dropZone,
-                borderColor: dragging ? PPTX_COLOR : '#444',
-                background: dragging ? `${PPTX_COLOR}11` : 'transparent',
+                borderColor: dragging ? accent : '#444',
+                background: dragging ? `${accent}11` : 'transparent',
               }}
               onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
               onDragLeave={() => setDragging(false)}
               onDrop={onDrop}
               onClick={() => inputRef.current?.click()}
             >
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
-              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>Drop a .pptx file here</div>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📄</div>
+              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>Drop a .pptx or .docx file here</div>
               <div style={{ color: '#888', fontSize: 13, marginBottom: 16 }}>or click to browse</div>
-              <div style={{ ...uploadBtn, background: PPTX_COLOR, display: 'inline-block', cursor: 'pointer' }}>
-                Choose .pptx file
+              <div style={{ ...uploadBtn, background: accent, display: 'inline-block', cursor: 'pointer' }}>
+                Choose a file
               </div>
             </div>
           </div>
@@ -197,7 +213,17 @@ const fileChip: CSSProperties = {
   background: '#2a2a2a',
   border: '1px solid #383838',
   fontSize: 12,
-  maxWidth: 380,
+  maxWidth: 420,
+};
+
+const chipTag: CSSProperties = {
+  fontSize: 10,
+  fontWeight: 700,
+  letterSpacing: '0.4px',
+  color: '#fff',
+  padding: '1px 6px',
+  borderRadius: 4,
+  flexShrink: 0,
 };
 
 const closeBtn: CSSProperties = {
