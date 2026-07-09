@@ -25,13 +25,25 @@ const px = (n: number) => `${n}px`;
 
 const ALIGN: Record<TextAlign, string> = { l: 'left', ctr: 'center', r: 'right', just: 'justify' };
 
-/** Render one page to a sheet element. */
+/** Base typographic context shared by the sheet and the paginator's measurer. */
+export const SHEET_FONT = {
+  fontFamily: 'Calibri, "Segoe UI", Arial, sans-serif',
+  fontSize: '16px',
+  lineHeight: '1.15',
+} as const;
+
+/**
+ * Render one paginated page as a fixed-size sheet: content flows in the padding
+ * box between the margins, with the header drawn in the top margin band and the
+ * footer in the bottom margin band (matching Word).
+ */
 export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
   const sheet = document.createElement('div');
   const s = sheet.style;
+  s.position = 'relative';
   s.boxSizing = 'border-box';
   s.width = px(page.size.wPx);
-  s.minHeight = px(page.size.hPx);
+  s.height = px(page.size.hPx);
   s.paddingTop = px(page.margins.topPx);
   s.paddingRight = px(page.margins.rightPx);
   s.paddingBottom = px(page.margins.bottomPx);
@@ -40,16 +52,47 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
   s.color = '#000';
   s.margin = '0 auto';
   s.boxShadow = '0 1px 6px rgba(0,0,0,0.35)';
-  s.fontFamily = 'Calibri, "Segoe UI", Arial, sans-serif';
-  s.fontSize = '16px';
-  s.lineHeight = '1.15';
+  s.fontFamily = SHEET_FONT.fontFamily;
+  s.fontSize = SHEET_FONT.fontSize;
+  s.lineHeight = SHEET_FONT.lineHeight;
+  s.overflow = 'hidden';
   s.overflowWrap = 'break-word';
+
+  const contentW = page.size.wPx - page.margins.leftPx - page.margins.rightPx;
+
+  if (page.header && page.header.length) {
+    sheet.appendChild(marginBand(page.header, deps, contentW, page.margins.leftPx, { top: px(page.margins.headerPx) }));
+  }
+  if (page.footer && page.footer.length) {
+    sheet.appendChild(marginBand(page.footer, deps, contentW, page.margins.leftPx, { bottom: px(page.margins.footerPx) }));
+  }
 
   for (const block of page.elements) sheet.appendChild(renderBlock(block, deps));
   return sheet;
 }
 
-function renderBlock(block: DocxBlock, deps: RenderDeps): HTMLElement {
+/** A header/footer positioned inside the page's top/bottom margin band. */
+function marginBand(
+  blocks: DocxBlock[],
+  deps: RenderDeps,
+  contentW: number,
+  leftPx: number,
+  pos: { top?: string; bottom?: string },
+): HTMLDivElement {
+  const band = document.createElement('div');
+  const s = band.style;
+  s.position = 'absolute';
+  s.left = px(leftPx);
+  s.width = px(contentW);
+  if (pos.top) s.top = pos.top;
+  if (pos.bottom) s.bottom = pos.bottom;
+  s.color = '#000';
+  for (const block of blocks) band.appendChild(renderBlock(block, deps));
+  return band;
+}
+
+/** Render a single block to a DOM element (also used by the paginator to measure). */
+export function renderBlock(block: DocxBlock, deps: RenderDeps): HTMLElement {
   switch (block.kind) {
     case 'paragraph':
       return renderParagraph(block, deps);

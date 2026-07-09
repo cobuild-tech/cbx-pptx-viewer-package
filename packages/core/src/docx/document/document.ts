@@ -14,19 +14,20 @@ import { StyleTable } from '../styles/styles.js';
 import { Numbering } from '../numbering/numbering.js';
 import { parseBody } from './body.js';
 import { child } from '../../oxml/xml.js';
-import type { DocxPage, EmbeddedFont } from '../model.js';
+import type { DocxSection, EmbeddedFont } from '../model.js';
 import type { ParseContext } from './context.js';
 
 export class DocxDocument {
-  readonly pages: DocxPage[];
+  /** Parsed sections; the viewer's paginator flows these into fixed-size pages. */
+  readonly sections: DocxSection[];
   /** Fonts embedded in the package (empty in v1 — reserved for parity with Deck). */
   readonly embeddedFonts: EmbeddedFont[];
   private readonly pkg: OpcPackage;
   private readonly urlCache = new Map<string, string>();
 
-  private constructor(pkg: OpcPackage, pages: DocxPage[], embeddedFonts: EmbeddedFont[]) {
+  private constructor(pkg: OpcPackage, sections: DocxSection[], embeddedFonts: EmbeddedFont[]) {
     this.pkg = pkg;
-    this.pages = pages;
+    this.sections = sections;
     this.embeddedFonts = embeddedFonts;
   }
 
@@ -46,11 +47,12 @@ export class DocxDocument {
       styles,
       numbering,
       rel: (relId) => (relId ? pkg.resolveRel(docPart, relId) : undefined),
+      getPartXml: (part) => pkg.getXml(part),
     };
 
     const body = child(docXml, 'body');
-    const pages = body ? parseBody(body, ctx) : [];
-    return new DocxDocument(pkg, pages, []);
+    const sections = body ? parseBody(body, ctx) : [];
+    return new DocxDocument(pkg, sections, []);
   }
 
   /** Raw bytes of a part (e.g. an embedded font), for FontFace registration. */

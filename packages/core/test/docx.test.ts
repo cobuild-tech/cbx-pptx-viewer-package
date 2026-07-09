@@ -27,8 +27,20 @@ function buildDocx(): Uint8Array {
       rels(
         `<Relationship Id="rId1" Type="${DocxRelType.Styles}" Target="styles.xml"/>
          <Relationship Id="rId2" Type="${DocxRelType.Numbering}" Target="numbering.xml"/>
+         <Relationship Id="rHdr" Type="${DocxRelType.Header}" Target="header1.xml"/>
+         <Relationship Id="rFtr" Type="${DocxRelType.Footer}" Target="footer1.xml"/>
          <Relationship Id="rLink" Type="${OFFICE}/hyperlink" Target="https://example.com" TargetMode="External"/>`,
       ),
+    ),
+    'word/header1.xml': strToU8(
+      `<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:p><w:r><w:t>Header text</w:t></w:r></w:p>
+      </w:hdr>`,
+    ),
+    'word/footer1.xml': strToU8(
+      `<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+        <w:p><w:r><w:t>Footer text</w:t></w:r></w:p>
+      </w:ftr>`,
     ),
     'word/styles.xml': strToU8(
       `<w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
@@ -83,6 +95,8 @@ function buildDocx(): Uint8Array {
             </w:tr>
           </w:tbl>
           <w:sectPr>
+            <w:headerReference w:type="default" r:id="rHdr"/>
+            <w:footerReference w:type="default" r:id="rFtr"/>
             <w:pgSz w:w="12240" w:h="15840"/>
             <w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720"/>
           </w:sectPr>
@@ -103,15 +117,24 @@ describe('docx units', () => {
 
 describe('DocxDocument.load', () => {
   const doc = DocxDocument.load(buildDocx());
+  const section = doc.sections[0]!;
 
-  it('produces one page for a single-section document', () => {
-    expect(doc.pages).toHaveLength(1);
-    expect(doc.pages[0]!.size.wPx).toBeCloseTo(twipToPx(12240));
-    expect(doc.pages[0]!.margins.leftPx).toBeCloseTo(96);
+  it('produces one section with the section page size and margins', () => {
+    expect(doc.sections).toHaveLength(1);
+    expect(section.size.wPx).toBeCloseTo(twipToPx(12240));
+    expect(section.size.hPx).toBeCloseTo(twipToPx(15840));
+    expect(section.margins.leftPx).toBeCloseTo(96);
+  });
+
+  it('resolves the header and footer from the section references', () => {
+    const header = section.header![0] as DocxParagraph;
+    const footer = section.footer![0] as DocxParagraph;
+    expect(header.runs.map((r) => r.text).join('')).toBe('Header text');
+    expect(footer.runs.map((r) => r.text).join('')).toBe('Footer text');
   });
 
   it('resolves the style cascade (Heading1: centered, bold, larger, colored)', () => {
-    const title = doc.pages[0]!.elements[0] as DocxParagraph;
+    const title = section.blocks[0] as DocxParagraph;
     expect(title.kind).toBe('paragraph');
     expect(title.styleName).toBe('heading 1');
     expect(title.align).toBe('ctr');
@@ -122,14 +145,14 @@ describe('DocxDocument.load', () => {
   });
 
   it('parses runs with direct formatting and hyperlinks, preserving whitespace', () => {
-    const p = doc.pages[0]!.elements[1] as DocxParagraph;
+    const p = section.blocks[1] as DocxParagraph;
     expect(p.runs.map((r) => r.text)).toEqual(['Hello ', 'bold', 'link']);
     expect(p.runs[1]!.bold).toBe(true);
     expect(p.runs[2]!.hyperlink).toBe('https://example.com');
   });
 
   it('numbers an ordered list with running counters', () => {
-    const list = doc.pages[0]!.elements.filter(
+    const list = section.blocks.filter(
       (e): e is DocxParagraph => e.kind === 'paragraph' && e.listMarker !== undefined,
     );
     expect(list.map((p) => p.listMarker)).toEqual(['1.', '2.']);
@@ -137,7 +160,7 @@ describe('DocxDocument.load', () => {
   });
 
   it('builds a table grid with a horizontal span', () => {
-    const table = doc.pages[0]!.elements.find((e): e is DocxTable => e.kind === 'table')!;
+    const table = section.blocks.find((e): e is DocxTable => e.kind === 'table')!;
     expect(table.colWidths).toHaveLength(2);
     expect(table.rows).toHaveLength(2);
     // First row: one cell spanning 2 columns, plus a null placeholder.

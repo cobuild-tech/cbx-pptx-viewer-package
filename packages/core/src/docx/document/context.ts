@@ -5,6 +5,7 @@
  * parse slices can import it without a cycle through body.ts.
  */
 import type { Relationship } from '../../oxml/package.js';
+import type { XmlNode } from '../../oxml/xml.js';
 import type { StyleTable } from '../styles/styles.js';
 import type { Numbering } from '../numbering/numbering.js';
 
@@ -13,4 +14,6 @@ export interface ParseContext {
   numbering: Numbering;
   /** Resolve an r:id / r:embed relationship on the main document part. */
   rel(relId: string | undefined): Relationship | undefined;
+  /** Parsed XML of a package part by path (for header/footer parts). */
+  getPartXml(part: string): XmlNode | undefined;
 }

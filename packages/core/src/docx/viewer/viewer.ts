@@ -8,6 +8,7 @@
  */
 import type { DocxDocument } from '../document/document.js';
 import { renderPage } from '../render/dom.js';
+import { paginate } from './paginate.js';
 import type { DocxPage } from '../model.js';
 
 export interface DocxViewerOptions {
@@ -31,6 +32,7 @@ export class DocxViewer {
   private readonly holder: HTMLDivElement;
   private readonly pagesEl: HTMLDivElement;
   private readonly pageEls: HTMLElement[] = [];
+  private readonly pageModels: DocxPage[];
   private readonly onChange: DocxViewerOptions['onChange'];
   private readonly fit: 'width' | 'actual';
   private index = 0;
@@ -62,7 +64,9 @@ export class DocxViewer {
     container.appendChild(this.holder);
 
     const deps = { imageUrl: (p: string) => this.doc.imageUrl(p) };
-    for (const page of this.pages) {
+    // Flow sections into fixed-size pages (needs the DOM for measurement).
+    this.pageModels = paginate(this.doc.sections, deps);
+    for (const page of this.pageModels) {
       const el = renderPage(page, deps);
       this.pageEls.push(el);
       this.pagesEl.appendChild(el);
@@ -86,7 +90,7 @@ export class DocxViewer {
     return this.index;
   }
   private get pages(): DocxPage[] {
-    return this.doc.pages;
+    return this.pageModels;
   }
 
   goTo(index: number): void {

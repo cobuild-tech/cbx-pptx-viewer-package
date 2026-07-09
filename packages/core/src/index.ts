@@ -41,6 +41,7 @@ export {
 export { renderPage as renderDocxPage, type RenderDeps as DocxRenderDeps } from './docx/render/dom.js';
 export { DocxRelType } from './docx/relTypes.js';
 export type {
+  DocxSection,
   DocxPage,
   DocxBlock,
   DocxParagraph,

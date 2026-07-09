@@ -1,16 +1,16 @@
 /**
- * Body walk: <w:body> -> DocxPage[].
+ * Body walk: <w:body> -> DocxSection[].
  *
  * Splits the body into sections at each <w:sectPr> (a section-ending paragraph
- * mark, or the final body-level sectPr) and emits one continuous-flow page per
- * section with that section's page size and margins. Measured pagination
- * (breaking a section across fixed-height pages) is a later fidelity pass.
+ * mark, or the final body-level sectPr). Each section carries its page size,
+ * margins, block flow, and resolved header/footer content. The viewer's
+ * paginator then flows each section's blocks into fixed-size pages.
  */
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx } from '../units.js';
 import { parseParagraph } from '../paragraphs/paragraph.js';
 import { parseTable } from '../tables/table.js';
-import type { DocxBlock, DocxPage, DocxPageSize, DocxPageMargins } from '../model.js';
+import type { DocxBlock, DocxSection, DocxPageSize, DocxPageMargins } from '../model.js';
 import type { ParseContext } from './context.js';
 
 /** US Letter, the Word default when a section omits <w:pgSz>. */
@@ -24,13 +24,14 @@ const DEFAULT_MARGINS: DocxPageMargins = {
   footerPx: twipToPx(720),
 };
 
-export function parseBody(body: XmlNode, ctx: ParseContext): DocxPage[] {
-  const pages: DocxPage[] = [];
+export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
+  const sections: DocxSection[] = [];
   let current: DocxBlock[] = [];
 
   const flush = (sectPr: XmlNode | undefined) => {
     const { size, margins } = readSectPr(sectPr);
-    pages.push({ index: pages.length, size, margins, elements: current });
+    const hf = readHeaderFooter(sectPr, ctx);
+    sections.push({ index: sections.length, size, margins, blocks: current, ...hf });
     current = [];
   };
 
@@ -49,9 +50,48 @@ export function parseBody(body: XmlNode, ctx: ParseContext): DocxPage[] {
   }
 
   // Body ended without a trailing sectPr child (unusual) — emit what's left.
-  if (current.length > 0 || pages.length === 0) flush(undefined);
+  if (current.length > 0 || sections.length === 0) flush(undefined);
 
-  return pages;
+  return sections;
+}
+
+/** Parse the block children (paragraphs, tables) of a body/header/footer node. */
+export function parseBlocks(container: XmlNode | undefined, ctx: ParseContext): DocxBlock[] {
+  if (!container) return [];
+  const out: DocxBlock[] = [];
+  for (const node of container.children) {
+    const name = localName(node.name);
+    if (name === 'p') out.push(...parseParagraph(node, ctx));
+    else if (name === 'tbl') out.push(parseTable(node, ctx));
+  }
+  return out;
+}
+
+function readHeaderFooter(
+  sectPr: XmlNode | undefined,
+  ctx: ParseContext,
+): { header?: DocxBlock[]; footer?: DocxBlock[] } {
+  if (!sectPr) return {};
+  const out: { header?: DocxBlock[]; footer?: DocxBlock[] } = {};
+
+  const header = resolveRef(children(sectPr, 'headerReference'), 'hdr', ctx);
+  if (header && header.length) out.header = header;
+  const footer = resolveRef(children(sectPr, 'footerReference'), 'ftr', ctx);
+  if (footer && footer.length) out.footer = footer;
+  return out;
+}
+
+/** Pick the 'default' reference (fall back to 'first', then any) and parse it. */
+function resolveRef(refs: XmlNode[], root: string, ctx: ParseContext): DocxBlock[] | undefined {
+  if (!refs.length) return undefined;
+  const pick =
+    refs.find((r) => (attr(r, 'type') ?? 'default') === 'default') ??
+    refs.find((r) => attr(r, 'type') === 'first') ??
+    refs[0]!;
+  const rel = ctx.rel(attr(pick, 'id'));
+  if (!rel) return undefined;
+  const xml = ctx.getPartXml(rel.target);
+  return xml ? parseBlocks(child(xml, root) ?? xml, ctx) : undefined;
 }
 
 function readSectPr(sectPr: XmlNode | undefined): { size: DocxPageSize; margins: DocxPageMargins } {

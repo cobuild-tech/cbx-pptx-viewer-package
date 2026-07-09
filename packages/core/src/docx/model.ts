@@ -147,12 +147,28 @@ export interface DocxInlineImage {
   alt?: string;
 }
 
-// ─── Page ────────────────────────────────────────────────────────────────────
+// ─── Section (parse output) ──────────────────────────────────────────────────
 
 /**
- * A single rendered page. Width is fixed to the section page size; in the
- * continuous-flow pass height is auto (content-driven) so nothing is clipped.
- * The viewer scales pages to fit the container width and stacks them vertically.
+ * One document section (delimited by <w:sectPr>): its page geometry plus the
+ * full block flow and the header/footer content for its pages. The paginator
+ * flows a section's blocks into one or more fixed-size {@link DocxPage}s.
+ */
+export interface DocxSection {
+  index: number;
+  size: DocxPageSize;
+  margins: DocxPageMargins;
+  blocks: DocxBlock[];
+  header?: DocxBlock[];
+  footer?: DocxBlock[];
+}
+
+// ─── Page (paginated output) ───────────────────────────────────────────────────
+
+/**
+ * A single fixed-size page produced by the paginator: the section page size,
+ * the slice of blocks that fit within the content area (between the top and
+ * bottom margins), and the section's header/footer drawn in the margin bands.
  */
 export interface DocxPage {
   index: number;
@@ -166,6 +182,6 @@ export interface DocxPage {
 // ─── Document ──────────────────────────────────────────────────────────────────
 
 export interface DocxDocumentData {
-  pages: DocxPage[];
+  sections: DocxSection[];
   embeddedFonts: import('../pptx/model.js').EmbeddedFont[];
 }
