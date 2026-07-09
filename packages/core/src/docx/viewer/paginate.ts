@@ -275,8 +275,58 @@ function splitTable(
   }
   if (best <= 0) return null; // not even one row fits here
 
+  const headRows = table.rows.slice(0, best).map((r) => r.slice());
+  const tailRows = table.rows.slice(best).map((r) => r.slice());
+  repairVerticalMerges(table, best, headRows, tailRows);
+
   return {
-    head: { ...table, rows: table.rows.slice(0, best) },
-    tail: { ...table, rows: table.rows.slice(best) },
+    head: { ...table, rows: headRows },
+    tail: { ...table, rows: tailRows },
   };
+}
+
+/**
+ * A vertically-merged (rowSpan) cell whose origin lands in the head but whose
+ * span reaches into the tail leaves the tail's covered positions as `null` —
+ * the renderer skips those, so the following cells shift into the wrong column.
+ * Clamp the head origin's rowSpan to the head, and re-materialise a (blank)
+ * continuation origin at the top of the tail so column alignment is preserved.
+ */
+function repairVerticalMerges(
+  table: DocxTable,
+  best: number,
+  headRows: (DocxTable['rows'][number][number])[][],
+  tailRows: (DocxTable['rows'][number][number])[][],
+): void {
+  const colCount = Math.max(0, ...table.rows.map((r) => r.length));
+
+  // owner[r][c] → the origin cell (and its start row/col) covering (r, c).
+  const owner: ({ cell: NonNullable<DocxTable['rows'][number][number]>; r: number; c: number } | null)[][] =
+    table.rows.map(() => Array(colCount).fill(null));
+  for (let r = 0; r < table.rows.length; r++) {
+    for (let c = 0; c < table.rows[r]!.length; c++) {
+      const cell = table.rows[r]![c];
+      if (!cell) continue;
+      for (let dr = 0; dr < cell.rowSpan; dr++) {
+        for (let dc = 0; dc < cell.colSpan; dc++) {
+          const or = owner[r + dr];
+          if (or) or[c + dc] = { cell, r, c };
+        }
+      }
+    }
+  }
+
+  const boundary = owner[best];
+  if (!boundary) return;
+  for (let c = 0; c < colCount; c++) {
+    const o = boundary[c];
+    if (!o || o.r >= best || o.c !== c) continue; // only the origin's start column, crossing the split
+    const headSpan = best - o.r;
+    const tailSpan = o.cell.rowSpan - headSpan;
+    if (tailSpan <= 0) continue;
+    // Clamp the head origin so it doesn't overhang past the page.
+    headRows[o.r]![c] = { ...o.cell, rowSpan: headSpan };
+    // Blank continuation origin at the top of the tail (keeps the column).
+    tailRows[0]![c] = { ...o.cell, content: [], rowSpan: tailSpan };
+  }
 }
