@@ -91,7 +91,11 @@ function resolveRef(refs: XmlNode[], root: string, ctx: ParseContext): DocxBlock
   const rel = ctx.rel(attr(pick, 'id'));
   if (!rel) return undefined;
   const xml = ctx.getPartXml(rel.target);
-  return xml ? parseBlocks(child(xml, root) ?? xml, ctx) : undefined;
+  if (!xml) return undefined;
+  // Header/footer parts have their own rels — resolve their images/hyperlinks
+  // against the header/footer part, not word/document.xml.
+  const partCtx = ctx.forPart(rel.target);
+  return parseBlocks(child(xml, root) ?? xml, partCtx);
 }
 
 function readSectPr(sectPr: XmlNode | undefined): { size: DocxPageSize; margins: DocxPageMargins } {

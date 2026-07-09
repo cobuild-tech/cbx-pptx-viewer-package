@@ -43,12 +43,15 @@ export class DocxDocument {
     const styles = StyleTable.parse(stylesPart ? pkg.getXml(stylesPart) : undefined);
     const numbering = Numbering.parse(numberingPart ? pkg.getXml(numberingPart) : undefined);
 
-    const ctx: ParseContext = {
+    const makeCtx = (partPath: string): ParseContext => ({
       styles,
       numbering,
-      rel: (relId) => (relId ? pkg.resolveRel(docPart, relId) : undefined),
+      partPath,
+      rel: (relId) => (relId ? pkg.resolveRel(partPath, relId) : undefined),
       getPartXml: (part) => pkg.getXml(part),
-    };
+      forPart: (part) => makeCtx(part),
+    });
+    const ctx = makeCtx(docPart);
 
     const body = child(docXml, 'body');
     const sections = body ? parseBody(body, ctx) : [];

@@ -16,15 +16,20 @@ export interface DocxViewerOptions {
   /** Enable PageUp/PageDown/Home/End navigation on the container. Default true. */
   keyboard?: boolean;
   /**
-   * Sizing. `'width'` (default) scales each page to fill the container width and
-   * scrolls vertically. `'actual'` renders at 100% with horizontal scroll.
+   * Initial zoom. A number is an explicit scale (1 = 100%); `'fit-width'`
+   * (default) fits the page to the container width, capped at 100% so wide
+   * panels don't upscale.
    */
-  fit?: 'width' | 'actual';
+  zoom?: number | 'fit-width';
   /** Called when the current (top-most visible) page changes. */
   onChange?: (index: number, count: number) => void;
+  /** Called whenever the effective zoom scale changes (1 = 100%). */
+  onScaleChange?: (scale: number) => void;
 }
 
 const PAGE_GAP = 16;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 5;
 
 export class DocxViewer {
   private readonly doc: DocxDocument;
@@ -34,7 +39,9 @@ export class DocxViewer {
   private readonly pageEls: HTMLElement[] = [];
   private readonly pageModels: DocxPage[];
   private readonly onChange: DocxViewerOptions['onChange'];
-  private readonly fit: 'width' | 'actual';
+  private readonly onScaleChange: DocxViewerOptions['onScaleChange'];
+  /** 'fit-width' recomputes on resize; a number is a fixed user zoom. */
+  private zoomMode: number | 'fit-width';
   private index = 0;
   private scale = 1;
   private resizeObserver: ResizeObserver | null = null;
@@ -44,8 +51,9 @@ export class DocxViewer {
   constructor(doc: DocxDocument, container: HTMLElement, options: DocxViewerOptions = {}) {
     this.doc = doc;
     this.container = container;
-    this.fit = options.fit ?? 'width';
+    this.zoomMode = options.zoom ?? 'fit-width';
     if (options.onChange) this.onChange = options.onChange;
+    if (options.onScaleChange) this.onScaleChange = options.onScaleChange;
 
     container.style.overflow = 'auto';
     container.style.background = '#525659';
@@ -108,19 +116,44 @@ export class DocxViewer {
     this.goTo(this.index - 1);
   }
 
-  /** Scale the page stack to fit the container width and size the holder box. */
+  /** Current effective zoom scale (1 = 100%). */
+  get currentScale(): number {
+    return this.scale;
+  }
+
+  /** Set an explicit zoom (1 = 100%); switches out of fit-width mode. */
+  setZoom(scale: number): void {
+    this.zoomMode = clamp(scale, MIN_ZOOM, MAX_ZOOM);
+    this.applyScale();
+  }
+  zoomIn(): void {
+    this.setZoom(this.scale * 1.25);
+  }
+  zoomOut(): void {
+    this.setZoom(this.scale / 1.25);
+  }
+  /** Re-fit each page to the container width (capped at 100%). */
+  fitWidth(): void {
+    this.zoomMode = 'fit-width';
+    this.applyScale();
+  }
+
+  /** Scale the page stack and size the holder box so scrollbars/centering match. */
   private applyScale(): void {
     const maxPageW = this.pages.reduce((m, p) => Math.max(m, p.size.wPx), 1);
-    const avail = this.container.clientWidth || maxPageW;
+    const avail = (this.container.clientWidth || maxPageW) - PAGE_GAP * 2;
 
-    this.scale = this.fit === 'width' ? avail / maxPageW : 1;
+    const next =
+      this.zoomMode === 'fit-width' ? Math.min(avail / maxPageW, 1) : this.zoomMode;
+    this.scale = clamp(next, MIN_ZOOM, MAX_ZOOM);
     this.pagesEl.style.transform = this.scale === 1 ? '' : `scale(${this.scale})`;
 
-    // Transform doesn't change layout box size; size the holder so scrollbars
-    // and centering reflect the scaled dimensions.
+    // Transform doesn't change the layout box; size the holder to the scaled
+    // dimensions so the scrollbars and `margin:auto` centering are correct.
     const naturalH = this.pagesEl.offsetHeight;
     this.holder.style.width = `${maxPageW * this.scale}px`;
     this.holder.style.height = `${naturalH * this.scale + PAGE_GAP * 2}px`;
+    this.onScaleChange?.(this.scale);
   }
 
   private updateCurrentFromScroll(): void {
@@ -139,6 +172,23 @@ export class DocxViewer {
   private enableKeyboard(): void {
     if (this.container.tabIndex < 0) this.container.tabIndex = 0;
     this.keyHandler = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          this.zoomIn();
+          return;
+        }
+        if (e.key === '-') {
+          e.preventDefault();
+          this.zoomOut();
+          return;
+        }
+        if (e.key === '0') {
+          e.preventDefault();
+          this.fitWidth();
+          return;
+        }
+      }
       switch (e.key) {
         case 'PageDown':
           e.preventDefault();
@@ -168,6 +218,10 @@ export class DocxViewer {
     this.pagesEl.remove();
     this.holder.remove();
   }
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
 }
 
 export function createDocxViewer(

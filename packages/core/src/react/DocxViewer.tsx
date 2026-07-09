@@ -7,6 +7,9 @@ export interface DocxViewerHandle {
   next(): void;
   prev(): void;
   goTo(index: number): void;
+  zoomIn(): void;
+  zoomOut(): void;
+  fitWidth(): void;
   doc: DocxDocument | null;
 }
 
@@ -31,6 +34,7 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
   const viewerRef = useRef<DocxViewerController | null>(null);
   const [index, setIndex] = useState(0);
   const [count, setCount] = useState(0);
+  const [scale, setScale] = useState(1);
 
   useEffect(() => {
     if (error) onError?.(error);
@@ -45,6 +49,7 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
         setCount(c);
         onPageChange?.(i, c);
       },
+      onScaleChange: setScale,
     });
     viewerRef.current = viewer;
     return () => {
@@ -59,6 +64,9 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
       next: () => viewerRef.current?.next(),
       prev: () => viewerRef.current?.prev(),
       goTo: (i: number) => viewerRef.current?.goTo(i),
+      zoomIn: () => viewerRef.current?.zoomIn(),
+      zoomOut: () => viewerRef.current?.zoomOut(),
+      fitWidth: () => viewerRef.current?.fitWidth(),
       doc,
     }),
     [doc],
@@ -83,6 +91,19 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
             disabled={index >= count - 1}
           >
             Next ›
+          </button>
+
+          <span style={divider} />
+
+          <button style={iconBtn} title="Zoom out (Ctrl -)" onClick={() => viewerRef.current?.zoomOut()}>
+            −
+          </button>
+          <span style={{ minWidth: 46, textAlign: 'center' }}>{Math.round(scale * 100)}%</span>
+          <button style={iconBtn} title="Zoom in (Ctrl +)" onClick={() => viewerRef.current?.zoomIn()}>
+            +
+          </button>
+          <button style={btn} title="Fit width (Ctrl 0)" onClick={() => viewerRef.current?.fitWidth()}>
+            Fit
           </button>
         </div>
       )}
@@ -114,4 +135,18 @@ const btn: CSSProperties = {
   background: '#3a3a3a',
   color: '#eee',
   cursor: 'pointer',
+};
+
+const iconBtn: CSSProperties = {
+  ...btn,
+  padding: '4px 10px',
+  fontSize: 15,
+  lineHeight: 1,
+  minWidth: 30,
+};
+
+const divider: CSSProperties = {
+  width: 1,
+  height: 20,
+  background: '#444',
 };

@@ -95,7 +95,7 @@ function marginBand(
 export function renderBlock(block: DocxBlock, deps: RenderDeps): HTMLElement {
   switch (block.kind) {
     case 'paragraph':
-      return renderParagraph(block, deps);
+      return renderParagraph(block);
     case 'table':
       return renderTable(block, deps);
     case 'image':
@@ -103,7 +103,7 @@ export function renderBlock(block: DocxBlock, deps: RenderDeps): HTMLElement {
   }
 }
 
-function renderParagraph(p: DocxParagraph, deps: RenderDeps): HTMLElement {
+function renderParagraph(p: DocxParagraph): HTMLElement {
   const el = document.createElement('div');
   const s = el.style;
   s.position = 'relative';
@@ -276,7 +276,17 @@ function strokeCss(stroke: Stroke): string {
   return `${Math.max(1, stroke.width)}px solid #${stroke.color.hex}`;
 }
 
-/** Quote a font family name if it contains spaces, for CSS safety. */
+/** Known serif families, so an uninstalled font falls back to the right generic. */
+const SERIF = /times|georgia|cambria|garamond|minion|book antiqua|palatino|serif|roman|constantia/i;
+
+/**
+ * Build a CSS font stack with a generic fallback. Word's default fonts (Calibri,
+ * etc.) are rarely installed on non-Windows machines; without a generic the
+ * browser falls back to serif, which looks nothing like Word. Pick serif vs
+ * sans-serif by family name so the substitute is close.
+ */
 function quoteFont(name: string): string {
-  return /[\s]/.test(name) ? `"${name}"` : name;
+  const quoted = /\s/.test(name) ? `"${name}"` : name;
+  const generic = SERIF.test(name) ? 'serif' : 'sans-serif';
+  return `${quoted}, ${generic}`;
 }
