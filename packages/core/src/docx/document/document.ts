@@ -12,7 +12,7 @@ import { OpcPackage } from '../../oxml/package.js';
 import { DocxRelType } from '../relTypes.js';
 import { StyleTable } from '../styles/styles.js';
 import { Numbering } from '../numbering/numbering.js';
-import { parseBody } from './body.js';
+import { parseBody, parseBlocks } from './body.js';
 import { child } from '../../oxml/xml.js';
 import type { DocxSection, EmbeddedFont } from '../model.js';
 import type { ParseContext } from './context.js';
@@ -43,14 +43,18 @@ export class DocxDocument {
     const styles = StyleTable.parse(stylesPart ? pkg.getXml(stylesPart) : undefined);
     const numbering = Numbering.parse(numberingPart ? pkg.getXml(numberingPart) : undefined);
 
-    const makeCtx = (partPath: string): ParseContext => ({
-      styles,
-      numbering,
-      partPath,
-      rel: (relId) => (relId ? pkg.resolveRel(partPath, relId) : undefined),
-      getPartXml: (part) => pkg.getXml(part),
-      forPart: (part) => makeCtx(part),
-    });
+    const makeCtx = (partPath: string): ParseContext => {
+      const c: ParseContext = {
+        styles,
+        numbering,
+        partPath,
+        rel: (relId) => (relId ? pkg.resolveRel(partPath, relId) : undefined),
+        getPartXml: (part) => pkg.getXml(part),
+        forPart: (part) => makeCtx(part),
+        parseBlocks: (container) => parseBlocks(container, c),
+      };
+      return c;
+    };
     const ctx = makeCtx(docPart);
 
     const body = child(docXml, 'body');

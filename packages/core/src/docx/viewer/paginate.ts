@@ -63,10 +63,28 @@ function createMeasurer(): Measurer {
 }
 
 function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): DocxPage[] {
-  // The text region is exactly the page size minus the section's margins (from
-  // <w:pgMar>); the header/footer live inside the top/bottom margin bands.
-  const contentW = section.size.wPx - section.margins.leftPx - section.margins.rightPx;
-  const contentH = section.size.hPx - section.margins.topPx - section.margins.bottomPx;
+  const { margins } = section;
+  // The text region is the page width minus the left/right margins; the
+  // header/footer live inside the top/bottom margin bands.
+  const contentW = section.size.wPx - margins.leftPx - margins.rightPx;
+
+  // A tall header/footer (banner) can extend past its margin band into the body.
+  // Word reserves space for it: the body starts below max(topMargin, header
+  // distance + header height) and ends above the mirror for the footer. The
+  // first page (when <w:titlePg>) may use a different header/footer set, so the
+  // two page kinds can reserve different amounts.
+  const firstHeader = section.titlePg ? section.firstHeader : section.header;
+  const firstFooter = section.titlePg ? section.firstFooter : section.footer;
+
+  const topFor = (hdr?: DocxBlock[]) =>
+    Math.max(margins.topPx, hdr ? margins.headerPx + bandHeight(hdr, deps, contentW, m) : 0);
+  const bottomFor = (ftr?: DocxBlock[]) =>
+    Math.max(margins.bottomPx, ftr ? margins.footerPx + bandHeight(ftr, deps, contentW, m) : 0);
+
+  const firstTop = topFor(firstHeader);
+  const firstBottom = bottomFor(firstFooter);
+  const restTop = topFor(section.header);
+  const restBottom = bottomFor(section.footer);
 
   const pages: DocxPage[] = [];
   let current: DocxBlock[] = [];
@@ -74,15 +92,28 @@ function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): D
 
   const lastSeenStyleText: Record<string, string> = {};
 
-  const makePage = (): DocxPage => ({
-    index: pages.length,
-    size: section.size,
-    margins: section.margins,
-    elements: current,
-    ...(section.header ? { header: section.header } : {}),
-    ...(section.footer ? { footer: section.footer } : {}),
-    ...(section.floats ? { floats: section.floats } : {}),
-  });
+  // The page currently being filled is index `pages.length`; its first page uses
+  // the first-page set when <w:titlePg> is set.
+  const isFirstPage = () => pages.length === 0;
+  const curTop = () => (isFirstPage() ? firstTop : restTop);
+  const curBottom = () => (isFirstPage() ? firstBottom : restBottom);
+  const contentH = () => section.size.hPx - curTop() - curBottom();
+
+  const makePage = (): DocxPage => {
+    const first = isFirstPage();
+    const header = first ? firstHeader : section.header;
+    const footer = first ? firstFooter : section.footer;
+    return {
+      index: pages.length,
+      size: section.size,
+      margins,
+      elements: current,
+      contentTopPx: first ? firstTop : restTop,
+      contentBottomPx: first ? firstBottom : restBottom,
+      ...(header ? { header } : {}),
+      ...(footer ? { footer } : {}),
+    };
+  };
   const flush = () => {
     const pageResolved = { ...lastSeenStyleText };
     const firstOccurrences: Record<string, string> = {};
@@ -131,7 +162,7 @@ function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): D
   const queue: DocxBlock[] = [...section.blocks];
   while (queue.length) {
     const block = queue.shift()!;
-    const avail = contentH - usedH;
+    const avail = contentH() - usedH;
     const h = m.height(block, deps, contentW);
 
     if (h <= avail) {
@@ -161,6 +192,37 @@ function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): D
 
   if (current.length > 0 || pages.length === 0) flush();
   return pages;
+}
+
+/**
+ * Visual height of a header/footer band: the taller of its flowed blocks and
+ * any floating anchors it carries (a banner image often overhangs the table it
+ * sits beside). Used to grow the body's top/bottom reserve so text clears it.
+ */
+function bandHeight(blocks: DocxBlock[], deps: RenderDeps, contentW: number, m: Measurer): number {
+  let flowed = 0;
+  let anchored = 0;
+  for (const b of blocks) {
+    flowed += m.height(b, deps, contentW);
+    anchored = Math.max(anchored, blockAnchorBottom(b));
+  }
+  return Math.max(flowed, anchored);
+}
+
+/** Largest bottom edge (vOffset + height) of anchors anywhere in a block. */
+function blockAnchorBottom(block: DocxBlock): number {
+  let max = 0;
+  if (block.kind === 'paragraph') {
+    for (const a of block.anchors ?? []) max = Math.max(max, (a.vOffsetPx ?? 0) + a.hPx);
+  } else if (block.kind === 'table') {
+    for (const row of block.rows) {
+      for (const cell of row) {
+        if (!cell) continue;
+        for (const sub of cell.content) max = Math.max(max, blockAnchorBottom(sub));
+      }
+    }
+  }
+  return max;
 }
 
 interface Split {

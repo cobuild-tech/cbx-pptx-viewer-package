@@ -1,15 +1,15 @@
 /**
- * Paragraph parsing: <w:p> -> DocxParagraph (+ any inline images as trailing
- * image blocks). Resolves the paragraph property cascade, the run base props
- * its runs inherit, and the pre-rendered list marker from numbering state.
+ * Paragraph parsing: <w:p> -> DocxParagraph. Inline drawings become drawing
+ * runs in the text stream; anchored (floating) drawings attach to the paragraph.
+ * Resolves the paragraph property cascade, the run base props its runs inherit,
+ * and the pre-rendered list marker from numbering state.
  */
-import { child, attr, localName, type XmlNode } from '../../oxml/xml.js';
+import { child, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx, twipToPt, halfPtToPt, borderSzToPx } from '../units.js';
 import { logicalChildren } from '../content.js';
 import { pPrFrom, rPrFrom, mergePara, mergeRun, type ParaProps, type RunProps, type RawBorder } from '../styles/styles.js';
 import { parseRunContainer, type FieldState } from './run.js';
-import { findImages } from '../images/image.js';
-import type { DocxBlock, DocxParagraph, DocxRun, Stroke, TextAlign } from '../model.js';
+import type { DocxBlock, DocxParagraph, DocxRun, DocxAnchor, Stroke, TextAlign } from '../model.js';
 import type { ParseContext } from '../document/context.js';
 
 /**
@@ -43,9 +43,10 @@ export function parseParagraph(p: XmlNode, ctx: ParseContext, tableBase?: TableB
 
   const fieldState: FieldState = { inField: false, fieldInstr: '', inSeparate: false };
   const runs: DocxRun[] = [];
+  const anchors: DocxAnchor[] = [];
   for (const node of logicalChildren(p)) {
     const name = localName(node.name);
-    if (name === 'r' || name === 'hyperlink') runs.push(...parseRunContainer(node, baseRun, ctx, fieldState, undefined));
+    if (name === 'r' || name === 'hyperlink') runs.push(...parseRunContainer(node, baseRun, ctx, fieldState, undefined, anchors));
   }
 
   const para: DocxParagraph = {
@@ -80,11 +81,8 @@ export function parseParagraph(p: XmlNode, ctx: ParseContext, tableBase?: TableB
     if (marker) para.listMarker = marker;
   }
 
-  const images = findImages(p, ctx);
-
-  // Image-only paragraph: drop the empty paragraph, keep the images.
-  if (runs.length === 0 && images.length > 0) return images;
-  return [para, ...images];
+  if (anchors.length) para.anchors = anchors;
+  return [para];
 }
 
 function applyIndents(para: DocxParagraph, r: ParaProps, ctx: ParseContext): void {
