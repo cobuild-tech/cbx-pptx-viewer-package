@@ -144,7 +144,10 @@ export class DocxViewer {
     // leaves no horizontal scrollbar and no side gutter around the page.
     const avail = this.container.clientWidth || maxPageW;
 
-    const next = this.zoomMode === 'fit-width' ? avail / maxPageW : this.zoomMode;
+    // Fit-width shrinks a wide page to the container but never upscales past
+    // 100% — otherwise a wide panel opens the document zoomed in.
+    const next =
+      this.zoomMode === 'fit-width' ? Math.min(avail / maxPageW, 1) : this.zoomMode;
     this.scale = clamp(next, MIN_ZOOM, MAX_ZOOM);
     // Pin the (unscaled) stack width to the widest page so the top-left scale
     // fills the holder exactly — otherwise the stack fills the holder's already
