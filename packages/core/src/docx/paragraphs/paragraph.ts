@@ -3,8 +3,9 @@
  * image blocks). Resolves the paragraph property cascade, the run base props
  * its runs inherit, and the pre-rendered list marker from numbering state.
  */
-import { child, children, attr, localName, type XmlNode } from '../../oxml/xml.js';
+import { child, attr, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx, twipToPt, halfPtToPt, borderSzToPx } from '../units.js';
+import { logicalChildren } from '../content.js';
 import { pPrFrom, rPrFrom, mergePara, mergeRun, type ParaProps, type RawBorder } from '../styles/styles.js';
 import { parseRunContainer } from './run.js';
 import { findImages } from '../images/image.js';
@@ -20,7 +21,7 @@ export function parseParagraph(p: XmlNode, ctx: ParseContext): DocxBlock[] {
   const baseRun = mergeRun(ctx.styles.resolveParaRunProps(styleId), rPrFrom(child(pPr, 'rPr')));
 
   const runs: DocxRun[] = [];
-  for (const node of p.children) {
+  for (const node of logicalChildren(p)) {
     const name = localName(node.name);
     if (name === 'r' || name === 'hyperlink') runs.push(...parseRunContainer(node, baseRun, ctx, undefined));
   }

@@ -8,6 +8,7 @@
  */
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx } from '../units.js';
+import { logicalChildren } from '../content.js';
 import { parseParagraph } from '../paragraphs/paragraph.js';
 import { parseTable } from '../tables/table.js';
 import type { DocxBlock, DocxSection, DocxPageSize, DocxPageMargins } from '../model.js';
@@ -35,7 +36,7 @@ export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
     current = [];
   };
 
-  for (const node of body.children) {
+  for (const node of logicalChildren(body)) {
     const name = localName(node.name);
     if (name === 'p') {
       current.push(...parseParagraph(node, ctx));
@@ -59,7 +60,7 @@ export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
 export function parseBlocks(container: XmlNode | undefined, ctx: ParseContext): DocxBlock[] {
   if (!container) return [];
   const out: DocxBlock[] = [];
-  for (const node of container.children) {
+  for (const node of logicalChildren(container)) {
     const name = localName(node.name);
     if (name === 'p') out.push(...parseParagraph(node, ctx));
     else if (name === 'tbl') out.push(parseTable(node, ctx));

@@ -5,8 +5,9 @@
  * spans (<w:gridSpan>) and vertical merges (<w:vMerge>) into colSpan/rowSpan on
  * origin cells with null placeholders for covered positions.
  */
-import { child, children, attr, attrNum, type XmlNode } from '../../oxml/xml.js';
+import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx } from '../units.js';
+import { logicalChildren, logicalChildrenNamed } from '../content.js';
 import { parseParagraph, borderToStroke } from '../paragraphs/paragraph.js';
 import type { DocxBlock, DocxTable, DocxTableCell, Stroke } from '../model.js';
 import type { RawBorder } from '../styles/styles.js';
@@ -22,11 +23,11 @@ export function parseTable(tbl: XmlNode, ctx: ParseContext): DocxTable {
   /** colIndex -> the origin cell currently being vertically merged. */
   const vmergeOrigin = new Map<number, DocxTableCell>();
 
-  const trList = children(tbl, 'tr');
+  const trList = logicalChildrenNamed(tbl, 'tr');
   for (const tr of trList) {
     const row: (DocxTableCell | null)[] = [];
     let col = 0;
-    for (const tc of children(tr, 'tc')) {
+    for (const tc of logicalChildrenNamed(tr, 'tc')) {
       const tcPr = child(tc, 'tcPr');
       const colSpan = attrNum(child(tcPr, 'gridSpan'), 'val') ?? 1;
       const vMerge = child(tcPr, 'vMerge');
@@ -65,8 +66,8 @@ function buildCell(
   ctx: ParseContext,
 ): DocxTableCell {
   const content: DocxBlock[] = [];
-  for (const node of tc.children) {
-    const name = node.name.split(':').pop();
+  for (const node of logicalChildren(tc)) {
+    const name = localName(node.name);
     if (name === 'p') content.push(...parseParagraph(node, ctx));
     else if (name === 'tbl') content.push(parseTable(node, ctx));
   }

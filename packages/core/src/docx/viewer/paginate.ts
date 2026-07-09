@@ -62,9 +62,24 @@ function createMeasurer(): Measurer {
   };
 }
 
+/** Total rendered height of a block list at the content width. */
+function blocksHeight(blocks: DocxBlock[], deps: RenderDeps, widthPx: number, m: Measurer): number {
+  return blocks.reduce((sum, b) => sum + m.height(b, deps, widthPx), 0);
+}
+
+const BAND_GAP = 8;
+
 function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): DocxPage[] {
   const contentW = section.size.wPx - section.margins.leftPx - section.margins.rightPx;
-  const contentH = section.size.hPx - section.margins.topPx - section.margins.bottomPx;
+
+  // If the header/footer is taller than its margin band, push the content area
+  // in so it doesn't overlap the header/footer (as Word does).
+  const headerH = section.header ? blocksHeight(section.header, deps, contentW, m) : 0;
+  const footerH = section.footer ? blocksHeight(section.footer, deps, contentW, m) : 0;
+  const topPx = Math.max(section.margins.topPx, section.margins.headerPx + headerH + BAND_GAP);
+  const bottomPx = Math.max(section.margins.bottomPx, section.margins.footerPx + footerH + BAND_GAP);
+  const margins = { ...section.margins, topPx, bottomPx };
+  const contentH = section.size.hPx - topPx - bottomPx;
 
   const pages: DocxPage[] = [];
   let current: DocxBlock[] = [];
@@ -73,7 +88,7 @@ function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): D
   const makePage = (): DocxPage => ({
     index: pages.length,
     size: section.size,
-    margins: section.margins,
+    margins,
     elements: current,
     ...(section.header ? { header: section.header } : {}),
     ...(section.footer ? { footer: section.footer } : {}),
