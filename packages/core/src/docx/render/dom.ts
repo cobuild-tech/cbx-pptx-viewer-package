@@ -178,11 +178,14 @@ function renderParagraph(
         segments.push(currentSegment);
       }
 
-      // Render each segment as a flex item
+      // Render each segment as a flex item. The segment itself is inline-block
+      // (not inline-flex) so its runs flow as normal inline text — otherwise each
+      // run becomes a flex item and flexbox trims the trailing whitespace at the
+      // item boundary, collapsing e.g. "Page " + "1" into "Page1".
       for (const segment of segments) {
         const segEl = document.createElement('span');
-        segEl.style.display = 'inline-flex';
-        segEl.style.alignItems = 'center';
+        segEl.style.display = 'inline-block';
+        segEl.style.verticalAlign = 'middle';
         for (const run of segment) {
           const cleanRun = { ...run, tabBefore: false };
           appendRun(segEl, cleanRun, pageIndex, resolvedStyles);
