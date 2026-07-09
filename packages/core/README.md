@@ -38,8 +38,8 @@ function Doc({ file }: { file: File }) {
 **`<PptxViewer src toolbar? className? style? onLoad? onError? onSlideChange? />`**
 Renders a `.pptx` deck with built-in prev/next navigation. Pass a ref to get `{ next(), prev(), goTo(index), deck }`.
 
-**`<DocxViewer src editable? versionStore? docId? toolbar? className? style? onLoad? onError? onPageChange? onEdit? onVersionSaved? />`**
-Renders a `.docx` document, paginated. Set `editable` to enable inline WYSIWYG editing and the built-in editor toolbar (undo/redo, formatting, save/restore versions, download). Pass a ref to get `{ next(), prev(), goTo(index), undo(), redo(), saveVersion(label?), restore(versionId), exportBlob(), doc }`.
+**`<DocxViewer src toolbar? className? style? onLoad? onError? onPageChange? />`**
+Renders a `.docx` document, paginated, with a thumbnail strip. Pass a ref to get `{ next(), prev(), goTo(index), doc }`.
 
 ### Hooks
 
@@ -81,19 +81,17 @@ doc.dispose();
 
 Always call `dispose()` on the deck/document when you're done with it — it revokes object URLs created for embedded media.
 
-## DOCX editing
-
-`loadDocx` documents support inline editing when driven through `createDocxViewer`/`<DocxViewer editable>`: undo/redo, run and paragraph formatting, table row insert/delete, and pluggable version snapshots via a `DocxVersionStore` (an `InMemoryVersionStore` is included; implement the interface yourself to persist elsewhere). Edited documents can be exported back to a `.docx` `Blob` via `doc.exportBlob()`.
-
 ## What's supported
 
-- PPTX: ~106 preset shapes, charts, tables, pictures, text with autofit, gradients (including radial focus/path gradients), SmartArt is not yet laid out (data model only).
-- DOCX: paragraphs, tables, images, numbering/lists, styles, inline editing.
+Both formats are **read-only viewers**.
+
+- PPTX: ~106 preset shapes, charts, tables, pictures, text with autofit, gradients (including radial focus/path gradients); SmartArt is not yet laid out (data model only).
+- DOCX: paragraphs, runs, tables (styles + conditional formatting), images, numbering/lists, styles, headers/footers, section-aware pagination.
 
 ## Package layout
 
 | Export | Contents |
 |---|---|
 | `@cobuildx.ai/office-viewer` | Deck/document loading, viewers, renderers, and low-level OOXML building blocks (`OpcPackage`, XML helpers) — no React dependency. |
-| `@cobuildx.ai/office-viewer/react` | `PptxViewer`, `DocxViewer`, `DocxEditorToolbar`, `useDeck`, `useDocument`. |
+| `@cobuildx.ai/office-viewer/react` | `PptxViewer`, `DocxViewer`, `useDeck`, `useDocument`. |
 

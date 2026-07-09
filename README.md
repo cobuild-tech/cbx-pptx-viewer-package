@@ -7,10 +7,9 @@ selectable, hyperlinks work, and the output is accessible.
 
 Published to npm as [`@cobuildx.ai/office-viewer`](https://www.npmjs.com/package/@cobuildx.ai/office-viewer).
 
-> Status: the **PPTX viewer is read-only**. The **DOCX viewer supports inline
-> editing** (undo/redo, run/paragraph formatting, table row insert/delete,
-> pluggable version snapshots, export back to `.docx`). See
-> [Roadmap](#roadmap) and [Extending the package](#extending-the-package).
+> Status: **read-only viewers** for both formats — `.pptx` and `.docx` are
+> parsed and rendered to the DOM. See [What's supported](#whats-supported) and
+> [Extending the package](#extending-the-package).
 
 ## Why
 
@@ -63,7 +62,7 @@ points, so non-React consumers never pull in React:
 | Entry | Contents |
 | --- | --- |
 | `@cobuildx.ai/office-viewer` | framework-agnostic: `loadPptx`/`loadDocx`, viewers, renderers, low-level OOXML building blocks |
-| `@cobuildx.ai/office-viewer/react` | `<PptxViewer />`, `<DocxViewer />`, `<DocxEditorToolbar />`, `useDeck`, `useDocument` |
+| `@cobuildx.ai/office-viewer/react` | `<PptxViewer />`, `<DocxViewer />`, `useDeck`, `useDocument` |
 
 The engine itself is organized as a **shared low-level layer + per-format
 feature slices**. Each format is self-contained and must not import another
@@ -75,7 +74,7 @@ must never import pptx*.)
 packages/core/src/
   index.ts          public API: loadPptx / loadDocx, viewers, low-level exports
   react/            React entry point (@cobuildx.ai/office-viewer/react)
-    PptxViewer.tsx  DocxViewer.tsx  DocxEditorToolbar.tsx  useDeck.ts  useDocument.ts
+    PptxViewer.tsx  DocxViewer.tsx  useDeck.ts  useDocument.ts
 
   oxml/             SHARED, format-agnostic
     package.ts      OPC: unzip, content types, relationship resolution
@@ -97,10 +96,9 @@ packages/core/src/
     document/       top-level loader; body parsing
     paragraphs/     paragraphs + runs
     styles/  numbering/  tables/  images/
-    edit/           edit ops, node addressing, version snapshots
     model.ts        DOCX page/block/paragraph/table model
     render/         model -> HTML/CSS (dom.ts), pagination-aware
-    viewer/         paginated scroll view + thumbnail strip + inline editing
+    viewer/         paginated scroll view + thumbnail strip
 ```
 
 ## Usage
@@ -239,16 +237,13 @@ won't load there.
 - Paragraphs and runs with character formatting; list numbering
 - Tables (grid, cell borders/fills/text)
 - Inline images
+- Header/footer bands (incl. page-number/STYLEREF fields and banner images)
 - Section-aware **pagination** (page size + margins), scroll view + thumbnails
-- **Inline WYSIWYG editing** (opt-in via `editable`): undo/redo, run/paragraph
-  formatting, table row insert/delete, pluggable version snapshots
-  (`DocxVersionStore`), export the edited document back to a `.docx` `Blob`
 
 ## Known limitations
 
-- **PPTX is read-only** — no editing yet (the model is intentionally
-  render-agnostic to make round-trip editing tractable later, as it already is
-  for DOCX)
+- **Read-only** — both viewers render only; no editing (the model is
+  intentionally render-agnostic to keep round-trip editing tractable later)
 - PPTX: only the implemented preset geometries are exact; the rest fall back to
   a rectangle
 - Image *fills* inside shapes don't yet apply `srcRect` cropping (standalone
@@ -262,8 +257,8 @@ won't load there.
 
 ## Extending the package
 
-The codebase is structured so new formats and, eventually, an editor slot in
-without rewrites. Conventions to follow:
+The codebase is structured so new formats slot in without rewrites.
+Conventions to follow:
 
 - **Shared vs. format code.** Anything format-agnostic (OPC packaging, XML
   helpers, unit conversion) lives in `oxml/` and is the *only* shared layer.
@@ -276,28 +271,18 @@ without rewrites. Conventions to follow:
   export `load<Format>` + `create<Format>Viewer` from `src/index.ts` and add a
   React wrapper + hook in `packages/react/src/`.
 - **Render-agnostic model first.** Parsing produces a plain model; rendering is a
-  separate pass. Keep new features on that boundary — this is what makes an
-  editor (model edit → DOM re-render → XML round-trip) feasible.
+  separate pass. Keep new features on that boundary.
 - **Fidelity is generic.** Fixes must work for any conformant file, never
   special-cased to a particular deck.
 - **No PDF/LibreOffice step**, ever — render natively in the browser, including
   for any reference/diff comparison.
 
-### Toward an editor
-
-DOCX already proves the pattern out: edits mutate the render-agnostic model
-via `applyOp`, the DOM re-renders, and `exportBlob()` serializes back to a real
-`.docx`. Extending the same model → render → serialize loop to PPTX (text
-first, then shape move/resize/restyle) is the main remaining piece.
-
 ## Roadmap
 
-- PPTX editing: text-content editing with round-trip export, then shape
-  move / resize / restyle
 - More PPTX preset geometries and effect mapping (CSS shadow / filter)
 - `srcRect` cropping for image fills inside shapes
 - Speaker-notes panel, fullscreen
-- Richer DOCX coverage (headers/footers, footnotes, fields)
+- Richer DOCX coverage (footnotes, more field types)
 - Optional visual-diff testing against reference renders
 - Further formats (e.g. `.xlsx`) as new sibling slices
 
