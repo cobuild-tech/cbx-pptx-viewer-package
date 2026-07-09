@@ -157,7 +157,41 @@ function renderParagraph(
     // Preserve the height of an empty line.
     el.appendChild(document.createTextNode('​'));
   } else {
-    for (const run of p.runs) appendRun(el, run, pageIndex, resolvedStyles);
+    const hasTab = p.runs.some((r) => r.tabBefore);
+    if (hasTab) {
+      s.display = 'flex';
+      s.justifyContent = 'space-between';
+      s.alignItems = 'center';
+      s.width = '100%';
+
+      // Group runs into segments separated by tabs
+      const segments: DocxRun[][] = [];
+      let currentSegment: DocxRun[] = [];
+      for (const run of p.runs) {
+        if (run.tabBefore) {
+          segments.push(currentSegment);
+          currentSegment = [];
+        }
+        currentSegment.push(run);
+      }
+      if (currentSegment.length > 0) {
+        segments.push(currentSegment);
+      }
+
+      // Render each segment as a flex item
+      for (const segment of segments) {
+        const segEl = document.createElement('span');
+        segEl.style.display = 'inline-flex';
+        segEl.style.alignItems = 'center';
+        for (const run of segment) {
+          const cleanRun = { ...run, tabBefore: false };
+          appendRun(segEl, cleanRun, pageIndex, resolvedStyles);
+        }
+        el.appendChild(segEl);
+      }
+    } else {
+      for (const run of p.runs) appendRun(el, run, pageIndex, resolvedStyles);
+    }
   }
   return el;
 }
@@ -280,6 +314,8 @@ function renderCell(
   } else {
     s.padding = '2px 5px';
   }
+  s.wordBreak = 'keep-all';
+  s.overflowWrap = 'normal';
   if (cell.borders) {
     if (cell.borders.l) s.borderLeft = strokeCss(cell.borders.l);
     if (cell.borders.t) s.borderTop = strokeCss(cell.borders.t);
@@ -287,7 +323,7 @@ function renderCell(
     if (cell.borders.b) s.borderBottom = strokeCss(cell.borders.b);
   }
 
-  for (const block of cell.content) td.appendChild(renderBlock(block, deps));
+  for (const block of cell.content) td.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
   if (!cell.content.length) td.appendChild(document.createTextNode('​'));
   return td;
 }
