@@ -9,8 +9,8 @@
  *
  * Requires a DOM (browser); it runs at viewer mount, not at parse time.
  */
-import { renderBlock, SHEET_FONT, type RenderDeps } from '../render/dom.js';
-import type { DocxSection, DocxPage, DocxBlock, DocxParagraph, DocxTable, DocxRun } from '../model.js';
+import { renderBlock, SHEET_FONT, isPageAnchored, type RenderDeps } from '../render/dom.js';
+import type { DocxSection, DocxPage, DocxBlock, DocxParagraph, DocxTable, DocxRun, DocxAnchor, DocxPageSize, DocxPageMargins } from '../model.js';
 
 /** Flow every section into fixed-size pages. */
 export function paginate(sections: DocxSection[], deps: RenderDeps): DocxPage[] {
@@ -76,10 +76,22 @@ function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): D
   const firstHeader = section.titlePg ? section.firstHeader : section.header;
   const firstFooter = section.titlePg ? section.firstFooter : section.footer;
 
+  const { size } = section;
+  // Flow-framed header/footer content sits inside the band (headerPx/footerPx +
+  // its own height). Page-framed banners (relativeFrom page/margins) are placed
+  // in page coordinates, so their reserve is their page-space extent directly.
   const topFor = (hdr?: DocxBlock[]) =>
-    Math.max(margins.topPx, hdr ? margins.headerPx + bandHeight(hdr, deps, contentW, m) : 0);
+    Math.max(
+      margins.topPx,
+      hdr ? margins.headerPx + bandHeight(hdr, deps, contentW, m) : 0,
+      pageEdgeReserve(hdr, size, margins, 'top'),
+    );
   const bottomFor = (ftr?: DocxBlock[]) =>
-    Math.max(margins.bottomPx, ftr ? margins.footerPx + bandHeight(ftr, deps, contentW, m) : 0);
+    Math.max(
+      margins.bottomPx,
+      ftr ? margins.footerPx + bandHeight(ftr, deps, contentW, m) : 0,
+      pageEdgeReserve(ftr, size, margins, 'bottom'),
+    );
 
   const firstTop = topFor(firstHeader);
   const firstBottom = bottomFor(firstFooter);
@@ -209,11 +221,17 @@ function bandHeight(blocks: DocxBlock[], deps: RenderDeps, contentW: number, m: 
   return Math.max(flowed, anchored);
 }
 
-/** Largest bottom edge (vOffset + height) of anchors anywhere in a block. */
+/**
+ * Largest bottom edge (vOffset + height) of FLOW-framed anchors in a block —
+ * these sit inside the header/footer band. Page-framed anchors are reserved
+ * separately in page coordinates.
+ */
 function blockAnchorBottom(block: DocxBlock): number {
   let max = 0;
   if (block.kind === 'paragraph') {
-    for (const a of block.anchors ?? []) max = Math.max(max, (a.vOffsetPx ?? 0) + a.hPx);
+    for (const a of block.anchors ?? []) {
+      if (!isPageAnchored(a)) max = Math.max(max, (a.vOffsetPx ?? 0) + a.hPx);
+    }
   } else if (block.kind === 'table') {
     for (const row of block.rows) {
       for (const cell of row) {
@@ -223,6 +241,51 @@ function blockAnchorBottom(block: DocxBlock): number {
     }
   }
   return max;
+}
+
+/**
+ * Body reserve at the top/bottom page edge for page-framed banners: a banner
+ * near the top edge pushes content down past its bottom; one near the bottom
+ * pushes it up past its top.
+ */
+function pageEdgeReserve(
+  blocks: DocxBlock[] | undefined,
+  size: DocxPageSize,
+  margins: DocxPageMargins,
+  edge: 'top' | 'bottom',
+): number {
+  if (!blocks) return 0;
+  let r = 0;
+  for (const a of collectAnchors(blocks)) {
+    if (!isPageAnchored(a)) continue;
+    const top = anchorPageTop(a, size, margins);
+    const inTopHalf = top < size.hPx / 2;
+    if (edge === 'top' && inTopHalf) r = Math.max(r, top + a.hPx);
+    else if (edge === 'bottom' && !inTopHalf) r = Math.max(r, size.hPx - top);
+  }
+  return r;
+}
+
+/** All anchors under a block tree (paragraph anchors + table cells). */
+function collectAnchors(blocks: DocxBlock[], out: DocxAnchor[] = []): DocxAnchor[] {
+  for (const b of blocks) {
+    if (b.kind === 'paragraph') out.push(...(b.anchors ?? []));
+    else if (b.kind === 'table') {
+      for (const row of b.rows) for (const cell of row) if (cell) collectAnchors(cell.content, out);
+    }
+  }
+  return out;
+}
+
+/** Page-space top of a page-framed anchor (mirrors renderSheetAnchor). */
+function anchorPageTop(a: DocxAnchor, size: DocxPageSize, margins: DocxPageMargins): number {
+  if (a.vAlign === 'center') return (size.hPx - a.hPx) / 2;
+  if (a.vAlign === 'bottom') return a.relV === 'page' ? size.hPx - a.hPx : size.hPx - margins.bottomPx - a.hPx;
+  if (a.vAlign === 'top') return a.relV === 'page' ? 0 : margins.topPx;
+  const off = a.vOffsetPx ?? 0;
+  if (a.relV === 'page') return off;
+  if (a.relV === 'bottomMargin' || a.relV === 'outsideMargin') return size.hPx - margins.bottomPx + off;
+  return margins.topPx + off;
 }
 
 interface Split {

@@ -28,6 +28,27 @@ const px = (n: number) => `${n}px`;
 
 const ALIGN: Record<TextAlign, string> = { l: 'left', ctr: 'center', r: 'right', just: 'justify' };
 
+// relativeFrom values framed to the page/margins (not the text flow). An anchor
+// whose VERTICAL reference is one of these is positioned in page coordinates on
+// the sheet — its flow position doesn't determine where it sits (e.g. a
+// full-page-width header banner anchored relativeFrom="page"). Anchors framed to
+// the paragraph/line/column stay attached to their paragraph instead.
+const PAGE_FRAME = new Set([
+  'page',
+  'margin',
+  'topMargin',
+  'bottomMargin',
+  'leftMargin',
+  'rightMargin',
+  'insideMargin',
+  'outsideMargin',
+]);
+
+/** Whether an anchor is positioned against the page frame (vs. the text flow). */
+export function isPageAnchored(a: DocxAnchor): boolean {
+  return PAGE_FRAME.has(a.relV);
+}
+
 /** Base typographic context shared by the sheet and the paginator's measurer. */
 export const SHEET_FONT = {
   fontFamily: 'Calibri, "Segoe UI", Arial, sans-serif',
@@ -65,6 +86,15 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
 
   const contentW = page.size.wPx - page.margins.leftPx - page.margins.rightPx;
 
+  // Page-framed anchors (banners relativeFrom="page"/margins) painted first, in
+  // page coordinates on the sheet, so behindDoc ones sit under the content and
+  // full-bleed banners ignore the text margins.
+  const pageAnchors: DocxAnchor[] = [];
+  collectPageAnchors(page.elements, pageAnchors);
+  if (page.header) collectPageAnchors(page.header, pageAnchors);
+  if (page.footer) collectPageAnchors(page.footer, pageAnchors);
+  for (const a of pageAnchors) sheet.appendChild(renderSheetAnchor(a, deps, page));
+
   if (page.header && page.header.length) {
     sheet.appendChild(marginBand(page.header, deps, contentW, page.margins.leftPx, { top: px(page.margins.headerPx) }, page.index, page.resolvedStyles));
   }
@@ -74,6 +104,17 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
 
   for (const block of page.elements) sheet.appendChild(renderBlock(block, deps, page.index, page.resolvedStyles));
   return sheet;
+}
+
+/** Gather page-framed anchors from a block tree (paragraph anchors + cells). */
+function collectPageAnchors(blocks: DocxBlock[], out: DocxAnchor[]): void {
+  for (const b of blocks) {
+    if (b.kind === 'paragraph') {
+      for (const a of b.anchors ?? []) if (isPageAnchored(a)) out.push(a);
+    } else if (b.kind === 'table') {
+      for (const row of b.rows) for (const cell of row) if (cell) collectPageAnchors(cell.content, out);
+    }
+  }
 }
 
 /** A header/footer positioned inside the page's top/bottom margin band. */
@@ -196,9 +237,10 @@ function renderParagraph(
     }
   }
 
-  // Floating (anchored) drawings positioned absolutely within this paragraph.
+  // Flow-framed anchors (relativeFrom column/paragraph) position within this
+  // paragraph. Page-framed anchors are hoisted to the sheet by renderPage.
   if (p.anchors) {
-    for (const a of p.anchors) el.appendChild(renderAnchor(a, deps));
+    for (const a of p.anchors) if (!isPageAnchored(a)) el.appendChild(renderAnchor(a, deps));
   }
   return el;
 }
@@ -367,6 +409,58 @@ function renderAnchor(anchor: DocxAnchor, deps: RenderDeps): HTMLElement {
   s.top = anchorTop(anchor);
   // behindDoc drawings sit under the text (negative z); others float above it.
   s.zIndex = anchor.behindDoc ? '-1' : '1';
+  return el;
+}
+
+/**
+ * Render a page-framed anchor (relativeFrom page/margins) in absolute page
+ * coordinates on the sheet, so full-bleed banners ignore the text margins and
+ * relativeFrom="page" offsets are measured from the page edge.
+ */
+function renderSheetAnchor(anchor: DocxAnchor, deps: RenderDeps, page: DocxPage): HTMLElement {
+  const el = renderDrawing(anchor.drawing, deps);
+  const s = el.style;
+  const { size, margins } = page;
+  const contentW = size.wPx - margins.leftPx - margins.rightPx;
+  s.position = 'absolute';
+  s.margin = '0';
+  s.width = px(anchor.wPx);
+  s.height = px(anchor.hPx);
+  s.maxWidth = 'none';
+
+  // Horizontal.
+  let left: number;
+  if (anchor.hAlign === 'center') {
+    left = anchor.relH === 'page' ? (size.wPx - anchor.wPx) / 2 : margins.leftPx + (contentW - anchor.wPx) / 2;
+  } else if (anchor.hAlign === 'right' || anchor.hAlign === 'outside') {
+    left = anchor.relH === 'page' ? size.wPx - anchor.wPx : size.wPx - margins.rightPx - anchor.wPx;
+  } else if (anchor.hAlign === 'left' || anchor.hAlign === 'inside') {
+    left = anchor.relH === 'page' ? 0 : margins.leftPx;
+  } else {
+    const off = anchor.hOffsetPx ?? 0;
+    if (anchor.relH === 'page') left = off;
+    else if (anchor.relH === 'rightMargin' || anchor.relH === 'outsideMargin') left = size.wPx - margins.rightPx + off;
+    else left = margins.leftPx + off; // leftMargin / margin / column / character
+  }
+
+  // Vertical.
+  let top: number;
+  if (anchor.vAlign === 'center') {
+    top = (size.hPx - anchor.hPx) / 2;
+  } else if (anchor.vAlign === 'bottom') {
+    top = anchor.relV === 'page' ? size.hPx - anchor.hPx : size.hPx - margins.bottomPx - anchor.hPx;
+  } else if (anchor.vAlign === 'top') {
+    top = anchor.relV === 'page' ? 0 : margins.topPx;
+  } else {
+    const off = anchor.vOffsetPx ?? 0;
+    if (anchor.relV === 'page') top = off;
+    else if (anchor.relV === 'bottomMargin' || anchor.relV === 'outsideMargin') top = size.hPx - margins.bottomPx + off;
+    else top = margins.topPx + off; // topMargin / margin / text
+  }
+
+  s.left = px(left);
+  s.top = px(top);
+  s.zIndex = anchor.behindDoc ? '-1' : '5';
   return el;
 }
 
