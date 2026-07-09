@@ -58,6 +58,58 @@ export interface RawBorder {
 }
 export type RawBorders = Partial<Record<'top' | 'bottom' | 'left' | 'right', RawBorder>>;
 
+/** Cell-level formatting a table style (or conditional format) contributes. */
+export interface CellShade {
+  fillHex?: string;
+  vAlign?: 'top' | 'center' | 'bottom';
+  borders?: RawBorders;
+}
+
+/** One layer of table formatting: whole-table defaults or a conditional format. */
+export interface TableCond {
+  pPr: Partial<ParaProps>;
+  rPr: Partial<RunProps>;
+  tc: CellShade;
+}
+
+/** A table style resolved through its basedOn chain, ready to apply per cell. */
+export interface ResolvedTableStyle {
+  /** Outer table borders (top/bottom/left/right). */
+  tblBorders: RawBorders;
+  insideH?: RawBorder;
+  insideV?: RawBorder;
+  /** Default cell margins in twips. */
+  cellMar?: { top: number; right: number; bottom: number; left: number };
+  rowBandSize: number;
+  colBandSize: number;
+  /** Whole-table defaults. */
+  whole: TableCond;
+  /** Conditional formats keyed by <w:tblStylePr w:type> (firstRow, band1Horz, …). */
+  cond: Map<string, TableCond>;
+}
+
+/** Which conditional formats a table enables (from <w:tblLook>). */
+export interface TableLook {
+  firstRow: boolean;
+  lastRow: boolean;
+  firstCol: boolean;
+  lastCol: boolean;
+  noHBand: boolean;
+  noVBand: boolean;
+}
+
+/** Per-style table data (before the basedOn chain is merged). */
+interface TableStylePart {
+  tblBorders?: RawBorders;
+  insideH?: RawBorder;
+  insideV?: RawBorder;
+  cellMar?: { top: number; right: number; bottom: number; left: number };
+  rowBandSize?: number;
+  colBandSize?: number;
+  tc: CellShade;
+  cond: Map<string, TableCond>;
+}
+
 interface StyleDef {
   id: string;
   type: string;
@@ -66,6 +118,8 @@ interface StyleDef {
   linkId?: string;
   pPr: Partial<ParaProps>;
   rPr: Partial<RunProps>;
+  /** Table-only formatting (present when type === 'table'). */
+  tbl?: TableStylePart;
 }
 
 export class StyleTable {
@@ -114,6 +168,7 @@ export class StyleTable {
           pPr: pPrFrom(child(s, 'pPr')),
           rPr: rPrFrom(child(s, 'rPr')),
         };
+        if (type === 'table') def.tbl = readTablePart(s);
         byId.set(id, def);
         if (attr(s, 'default') && bool(attr(s, 'default'))) {
           if (type === 'paragraph') defaultParaId = id;
@@ -169,6 +224,195 @@ export class StyleTable {
     for (const s of this.chain(styleId)) acc = mergeRun(acc, s.rPr);
     return acc;
   }
+
+  /**
+   * Resolve a table style (via <w:tblStyle>) through its basedOn chain into a
+   * flat {@link ResolvedTableStyle}: outer/inside borders, default cell margins,
+   * whole-table defaults, and the conditional formats (firstRow, bands, …).
+   */
+  resolveTableStyle(styleId: string | undefined): ResolvedTableStyle | undefined {
+    if (!styleId) return undefined;
+    const chain = this.chain(styleId).filter((d) => d.tbl);
+    if (!chain.length) return undefined;
+
+    const res: ResolvedTableStyle = {
+      tblBorders: {},
+      rowBandSize: 1,
+      colBandSize: 1,
+      whole: { pPr: {}, rPr: {}, tc: {} },
+      cond: new Map(),
+    };
+    for (const d of chain) {
+      const t = d.tbl!;
+      res.whole.pPr = mergePara(res.whole.pPr as ParaProps, d.pPr);
+      res.whole.rPr = mergeRun(res.whole.rPr as RunProps, d.rPr);
+      res.whole.tc = mergeCellShade(res.whole.tc, t.tc);
+      if (t.tblBorders) res.tblBorders = { ...res.tblBorders, ...t.tblBorders };
+      if (t.insideH) res.insideH = t.insideH;
+      if (t.insideV) res.insideV = t.insideV;
+      if (t.cellMar) res.cellMar = t.cellMar;
+      if (t.rowBandSize !== undefined) res.rowBandSize = t.rowBandSize;
+      if (t.colBandSize !== undefined) res.colBandSize = t.colBandSize;
+      for (const [type, cond] of t.cond) {
+        const prev = res.cond.get(type);
+        res.cond.set(type, prev ? mergeTableCond(prev, cond) : cond);
+      }
+    }
+    return res;
+  }
+}
+
+/** Merge two conditional-format layers (`over` wins). */
+function mergeTableCond(base: TableCond, over: TableCond): TableCond {
+  return {
+    pPr: mergePara(base.pPr as ParaProps, over.pPr),
+    rPr: mergeRun(base.rPr as RunProps, over.rPr),
+    tc: mergeCellShade(base.tc, over.tc),
+  };
+}
+
+function mergeCellShade(base: CellShade, over: CellShade): CellShade {
+  const out: CellShade = { ...base, ...definedOnly(over) };
+  if (base.borders || over.borders) out.borders = { ...base.borders, ...over.borders };
+  return out;
+}
+
+/**
+ * Effective formatting for one cell: layer the whole-table defaults, then the
+ * enabled conditional formats in ascending precedence (bands < first/last
+ * col < first/last row < corner cells), exactly as Word applies them.
+ */
+export function tableCellFormat(
+  ts: ResolvedTableStyle,
+  row: number,
+  col: number,
+  rowCount: number,
+  colCount: number,
+  look: TableLook,
+): TableCond {
+  const layers: TableCond[] = [ts.whole];
+  const get = (type: string): void => {
+    const c = ts.cond.get(type);
+    if (c) layers.push(c);
+  };
+
+  // Banding runs over the "inner" rows/cols (excluding a first/last that has its
+  // own conditional). Band 1 is the first inner band; alternates 1,2,1,2,…
+  if (!look.noVBand) {
+    const start = look.firstCol ? 1 : 0;
+    const end = colCount - (look.lastCol ? 1 : 0);
+    if (col >= start && col < end) {
+      const band = Math.floor((col - start) / (ts.colBandSize || 1));
+      get(band % 2 === 0 ? 'band1Vert' : 'band2Vert');
+    }
+  }
+  if (!look.noHBand) {
+    const start = look.firstRow ? 1 : 0;
+    const end = rowCount - (look.lastRow ? 1 : 0);
+    if (row >= start && row < end) {
+      const band = Math.floor((row - start) / (ts.rowBandSize || 1));
+      get(band % 2 === 0 ? 'band1Horz' : 'band2Horz');
+    }
+  }
+  if (look.firstCol && col === 0) get('firstCol');
+  if (look.lastCol && col === colCount - 1) get('lastCol');
+  if (look.firstRow && row === 0) get('firstRow');
+  if (look.lastRow && row === rowCount - 1) get('lastRow');
+  if (look.firstRow && look.firstCol && row === 0 && col === 0) get('nwCell');
+  if (look.firstRow && look.lastCol && row === 0 && col === colCount - 1) get('neCell');
+  if (look.lastRow && look.firstCol && row === rowCount - 1 && col === 0) get('swCell');
+  if (look.lastRow && look.lastCol && row === rowCount - 1 && col === colCount - 1) get('seCell');
+
+  let out: TableCond = { pPr: {}, rPr: {}, tc: {} };
+  for (const l of layers) out = mergeTableCond(out, l);
+  return out;
+}
+
+/** Parse a <w:tblLook> element (or its hex val bitmask) into typed flags. */
+export function parseTableLook(el: XmlNode | undefined): TableLook {
+  const flag = (name: string, bit: number): boolean => {
+    const a = attr(el, name);
+    if (a !== undefined) return bool(a);
+    const val = attr(el, 'val');
+    if (val) return (parseInt(val, 16) & bit) !== 0;
+    return false;
+  };
+  return {
+    firstRow: flag('firstRow', 0x0020),
+    lastRow: flag('lastRow', 0x0040),
+    firstCol: flag('firstColumn', 0x0080),
+    lastCol: flag('lastColumn', 0x0100),
+    // noHBand/noVBand: the val bits are inverted (set bit = banding OFF).
+    noHBand: flag('noHBand', 0x0200),
+    noVBand: flag('noVBand', 0x0400),
+  };
+}
+
+// ─── Table style parsing ─────────────────────────────────────────────────────
+
+function readTablePart(s: XmlNode): TableStylePart {
+  const part: TableStylePart = { tc: readCellShade(child(s, 'tcPr')), cond: new Map() };
+
+  const tblPr = child(s, 'tblPr');
+  if (tblPr) {
+    const bordersNode = child(tblPr, 'tblBorders');
+    if (bordersNode) {
+      part.tblBorders = readSideBorders(bordersNode);
+      part.insideH = rawBorder(child(bordersNode, 'insideH'));
+      part.insideV = rawBorder(child(bordersNode, 'insideV'));
+    }
+    const cm = child(tblPr, 'tblCellMar');
+    if (cm) part.cellMar = readCellMarTwips(cm);
+    const rb = attrNum(child(tblPr, 'tblStyleRowBandSize'), 'val');
+    if (rb !== undefined) part.rowBandSize = rb;
+    const cb = attrNum(child(tblPr, 'tblStyleColBandSize'), 'val');
+    if (cb !== undefined) part.colBandSize = cb;
+  }
+
+  for (const sp of children(s, 'tblStylePr')) {
+    const type = attr(sp, 'type');
+    if (!type) continue;
+    part.cond.set(type, {
+      pPr: pPrFrom(child(sp, 'pPr')),
+      rPr: rPrFrom(child(sp, 'rPr')),
+      tc: readCellShade(child(sp, 'tcPr')),
+    });
+  }
+  return part;
+}
+
+function readCellShade(tcPr: XmlNode | undefined): CellShade {
+  if (!tcPr) return {};
+  const out: CellShade = {};
+  const fill = attr(child(tcPr, 'shd'), 'fill');
+  if (fill && fill !== 'auto') out.fillHex = normHex(fill);
+  const va = attr(child(tcPr, 'vAlign'), 'val');
+  if (va === 'center' || va === 'bottom' || va === 'top') out.vAlign = va;
+  const tb = child(tcPr, 'tcBorders');
+  if (tb) {
+    const b = readSideBorders(tb);
+    if (Object.keys(b).length) out.borders = b;
+  }
+  return out;
+}
+
+function rawBorder(e: XmlNode | undefined): RawBorder | undefined {
+  if (!e) return undefined;
+  return { sz: attrNum(e, 'sz'), colorHex: hexOrUndef(attr(e, 'color')), val: attr(e, 'val') };
+}
+
+function readSideBorders(node: XmlNode): RawBorders {
+  const out: RawBorders = {};
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    const b = rawBorder(child(node, side));
+    if (b) out[side] = b;
+  }
+  return out;
+}
+
+function readCellMarTwips(mar: XmlNode): { top: number; right: number; bottom: number; left: number } {
+  const side = (name: string): number => attrNum(child(mar, name), 'w') ?? 0;
+  return { top: side('top'), right: side('right'), bottom: side('bottom'), left: side('left') };
 }
 
 // ─── Merging ───────────────────────────────────────────────────────────────────

@@ -6,19 +6,40 @@
 import { child, attr, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx, twipToPt, halfPtToPt, borderSzToPx } from '../units.js';
 import { logicalChildren } from '../content.js';
-import { pPrFrom, rPrFrom, mergePara, mergeRun, type ParaProps, type RawBorder } from '../styles/styles.js';
+import { pPrFrom, rPrFrom, mergePara, mergeRun, type ParaProps, type RunProps, type RawBorder } from '../styles/styles.js';
 import { parseRunContainer, type FieldState } from './run.js';
 import { findImages } from '../images/image.js';
 import type { DocxBlock, DocxParagraph, DocxRun, Stroke, TextAlign } from '../model.js';
 import type { ParseContext } from '../document/context.js';
 
-export function parseParagraph(p: XmlNode, ctx: ParseContext): DocxBlock[] {
+/**
+ * Formatting a table style contributes to the paragraphs in a cell. It sits
+ * BELOW the paragraph's own style and direct props in the cascade (Word applies
+ * table styles before paragraph styles), so a cell paragraph can override it.
+ */
+export interface TableBase {
+  pPr: Partial<ParaProps>;
+  rPr: Partial<RunProps>;
+}
+
+export function parseParagraph(p: XmlNode, ctx: ParseContext, tableBase?: TableBase): DocxBlock[] {
   const pPr = child(p, 'pPr');
   const direct = pPrFrom(pPr);
   const styleId = direct.styleId;
-  const resolved = mergePara(ctx.styles.resolveParaProps(styleId), direct);
 
-  const baseRun = mergeRun(ctx.styles.resolveParaRunProps(styleId), rPrFrom(child(pPr, 'rPr')));
+  // Cascade: docDefaults -> table style -> paragraph style -> direct.
+  const styleResolved = ctx.styles.resolveParaProps(styleId);
+  const resolved = tableBase
+    ? mergePara(mergePara(tableBase.pPr as ParaProps, styleResolved), direct)
+    : mergePara(styleResolved, direct);
+
+  // Text runs inherit docDefaults -> (table style) -> paragraph style. Word's
+  // paragraph-mark rPr formats only the mark; we fold it in for the body path
+  // (long-standing behaviour) but not inside table cells, where doing so would
+  // wrongly override a conditional format like firstRow's white text.
+  const baseRun = tableBase
+    ? mergeRun(tableBase.rPr as RunProps, ctx.styles.resolveParaRunProps(styleId))
+    : mergeRun(ctx.styles.resolveParaRunProps(styleId), rPrFrom(child(pPr, 'rPr')));
 
   const fieldState: FieldState = { inField: false, fieldInstr: '', inSeparate: false };
   const runs: DocxRun[] = [];
