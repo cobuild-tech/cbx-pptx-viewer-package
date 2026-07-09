@@ -24,4 +24,10 @@ export interface ParseContext {
   getPartXml(part: string): XmlNode | undefined;
   /** A context whose relationships resolve against a different part. */
   forPart(partPath: string): ParseContext;
+  /**
+   * When true, anchored (floating) images are hoisted to page-level floats
+   * rather than emitted inline. Set while parsing header/footer parts, whose
+   * banners are positioned absolutely on the page.
+   */
+  hoistAnchors?: boolean;
 }

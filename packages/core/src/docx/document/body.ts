@@ -11,7 +11,8 @@ import { twipToPx } from '../units.js';
 import { logicalChildren } from '../content.js';
 import { parseParagraph } from '../paragraphs/paragraph.js';
 import { parseTable } from '../tables/table.js';
-import type { DocxBlock, DocxSection, DocxPageSize, DocxPageMargins } from '../model.js';
+import { collectFloats } from '../images/image.js';
+import type { DocxBlock, DocxFloat, DocxSection, DocxPageSize, DocxPageMargins } from '../model.js';
 import type { ParseContext } from './context.js';
 
 /** US Letter, the Word default when a section omits <w:pgSz>. */
@@ -31,7 +32,7 @@ export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
 
   const flush = (sectPr: XmlNode | undefined) => {
     const { size, margins } = readSectPr(sectPr);
-    const hf = readHeaderFooter(sectPr, ctx);
+    const hf = readHeaderFooter(sectPr, ctx, size, margins);
     sections.push({ index: sections.length, size, margins, blocks: current, ...hf });
     current = [];
   };
@@ -71,19 +72,30 @@ export function parseBlocks(container: XmlNode | undefined, ctx: ParseContext): 
 function readHeaderFooter(
   sectPr: XmlNode | undefined,
   ctx: ParseContext,
-): { header?: DocxBlock[]; footer?: DocxBlock[] } {
+  size: DocxPageSize,
+  margins: DocxPageMargins,
+): { header?: DocxBlock[]; footer?: DocxBlock[]; floats?: DocxFloat[] } {
   if (!sectPr) return {};
-  const out: { header?: DocxBlock[]; footer?: DocxBlock[] } = {};
+  const out: { header?: DocxBlock[]; footer?: DocxBlock[]; floats?: DocxFloat[] } = {};
+  const floats: DocxFloat[] = [];
 
-  const header = resolveRef(children(sectPr, 'headerReference'), 'hdr', ctx);
+  const header = resolveRef(children(sectPr, 'headerReference'), 'hdr', ctx, size, margins, floats);
   if (header && header.length) out.header = header;
-  const footer = resolveRef(children(sectPr, 'footerReference'), 'ftr', ctx);
+  const footer = resolveRef(children(sectPr, 'footerReference'), 'ftr', ctx, size, margins, floats);
   if (footer && footer.length) out.footer = footer;
+  if (floats.length) out.floats = floats;
   return out;
 }
 
 /** Pick the 'default' reference (fall back to 'first', then any) and parse it. */
-function resolveRef(refs: XmlNode[], root: string, ctx: ParseContext): DocxBlock[] | undefined {
+function resolveRef(
+  refs: XmlNode[],
+  root: string,
+  ctx: ParseContext,
+  size: DocxPageSize,
+  margins: DocxPageMargins,
+  floats: DocxFloat[],
+): DocxBlock[] | undefined {
   if (!refs.length) return undefined;
   const pick =
     refs.find((r) => (attr(r, 'type') ?? 'default') === 'default') ??
@@ -94,9 +106,12 @@ function resolveRef(refs: XmlNode[], root: string, ctx: ParseContext): DocxBlock
   const xml = ctx.getPartXml(rel.target);
   if (!xml) return undefined;
   // Header/footer parts have their own rels — resolve their images/hyperlinks
-  // against the header/footer part, not word/document.xml.
-  const partCtx = ctx.forPart(rel.target);
-  return parseBlocks(child(xml, root) ?? xml, partCtx);
+  // against the header/footer part, not word/document.xml. Anchored banners are
+  // hoisted to page-level floats.
+  const partCtx: ParseContext = { ...ctx.forPart(rel.target), hoistAnchors: true };
+  const container = child(xml, root) ?? xml;
+  floats.push(...collectFloats(container, partCtx, size, margins));
+  return parseBlocks(container, partCtx);
 }
 
 function readSectPr(sectPr: XmlNode | undefined): { size: DocxPageSize; margins: DocxPageMargins } {

@@ -60,7 +60,6 @@ export class DocxViewer {
 
     this.holder = document.createElement('div');
     this.holder.style.margin = '0 auto';
-    this.holder.style.padding = `${PAGE_GAP}px 0`;
 
     this.pagesEl = document.createElement('div');
     this.pagesEl.style.display = 'flex';
@@ -141,18 +140,23 @@ export class DocxViewer {
   /** Scale the page stack and size the holder box so scrollbars/centering match. */
   private applyScale(): void {
     const maxPageW = this.pages.reduce((m, p) => Math.max(m, p.size.wPx), 1);
-    const avail = (this.container.clientWidth || maxPageW) - PAGE_GAP * 2;
+    // clientWidth already excludes the vertical scrollbar, so filling it exactly
+    // leaves no horizontal scrollbar and no side gutter around the page.
+    const avail = this.container.clientWidth || maxPageW;
 
-    const next =
-      this.zoomMode === 'fit-width' ? Math.min(avail / maxPageW, 1) : this.zoomMode;
+    const next = this.zoomMode === 'fit-width' ? avail / maxPageW : this.zoomMode;
     this.scale = clamp(next, MIN_ZOOM, MAX_ZOOM);
+    // Pin the (unscaled) stack width to the widest page so the top-left scale
+    // fills the holder exactly — otherwise the stack fills the holder's already
+    // scaled width and centering offsets get amplified by the transform.
+    this.pagesEl.style.width = `${maxPageW}px`;
     this.pagesEl.style.transform = this.scale === 1 ? '' : `scale(${this.scale})`;
 
     // Transform doesn't change the layout box; size the holder to the scaled
     // dimensions so the scrollbars and `margin:auto` centering are correct.
     const naturalH = this.pagesEl.offsetHeight;
     this.holder.style.width = `${maxPageW * this.scale}px`;
-    this.holder.style.height = `${naturalH * this.scale + PAGE_GAP * 2}px`;
+    this.holder.style.height = `${naturalH * this.scale}px`;
     this.onScaleChange?.(this.scale);
   }
 

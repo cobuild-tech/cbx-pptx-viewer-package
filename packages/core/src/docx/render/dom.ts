@@ -11,6 +11,7 @@ import type {
   DocxTable,
   DocxTableCell,
   DocxInlineImage,
+  DocxFloat,
   DocxRun,
   Stroke,
   TextAlign,
@@ -59,6 +60,12 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
   s.overflowWrap = 'break-word';
 
   const contentW = page.size.wPx - page.margins.leftPx - page.margins.rightPx;
+
+  // Floating (anchored) images: absolutely positioned in page coordinates,
+  // painted first so behindDoc banners sit under the content.
+  if (page.floats) {
+    for (const f of page.floats) sheet.appendChild(renderFloat(f, deps));
+  }
 
   if (page.header && page.header.length) {
     sheet.appendChild(marginBand(page.header, deps, contentW, page.margins.leftPx, { top: px(page.margins.headerPx) }));
@@ -242,6 +249,23 @@ function renderCell(cell: DocxTableCell, deps: RenderDeps): HTMLElement {
   for (const block of cell.content) td.appendChild(renderBlock(block, deps));
   if (!cell.content.length) td.appendChild(document.createTextNode('​'));
   return td;
+}
+
+function renderFloat(f: DocxFloat, deps: RenderDeps): HTMLElement {
+  const url = deps.imageUrl(f.part);
+  const el = document.createElement(url ? 'img' : 'div') as HTMLElement;
+  const s = el.style;
+  s.position = 'absolute';
+  s.left = px(f.xPx);
+  s.top = px(f.yPx);
+  s.width = px(f.wPx);
+  s.height = px(f.hPx);
+  s.zIndex = f.behindDoc ? '0' : '2';
+  if (url) {
+    (el as HTMLImageElement).src = url;
+    if (f.alt) (el as HTMLImageElement).alt = f.alt;
+  }
+  return el;
 }
 
 function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {

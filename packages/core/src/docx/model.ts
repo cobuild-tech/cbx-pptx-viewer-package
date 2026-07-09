@@ -147,6 +147,22 @@ export interface DocxInlineImage {
   alt?: string;
 }
 
+/**
+ * A floating (anchored) image positioned absolutely on the page, in page
+ * coordinates (px from the page's top-left). Used for header/footer banners and
+ * other <wp:anchor> drawings that bleed outside the text margins.
+ */
+export interface DocxFloat {
+  part: string;
+  xPx: number;
+  yPx: number;
+  wPx: number;
+  hPx: number;
+  /** Drawn behind the text layer (<wp:anchor behindDoc>). */
+  behindDoc: boolean;
+  alt?: string;
+}
+
 // ─── Section (parse output) ──────────────────────────────────────────────────
 
 /**
@@ -161,6 +177,8 @@ export interface DocxSection {
   blocks: DocxBlock[];
   header?: DocxBlock[];
   footer?: DocxBlock[];
+  /** Page-anchored floating images (e.g. header/footer banners), page coords. */
+  floats?: DocxFloat[];
 }
 
 // ─── Page (paginated output) ───────────────────────────────────────────────────
@@ -177,6 +195,8 @@ export interface DocxPage {
   elements: DocxBlock[];
   header?: DocxBlock[];
   footer?: DocxBlock[];
+  /** Page-anchored floating images drawn absolutely on the sheet. */
+  floats?: DocxFloat[];
 }
 
 // ─── Document ──────────────────────────────────────────────────────────────────
