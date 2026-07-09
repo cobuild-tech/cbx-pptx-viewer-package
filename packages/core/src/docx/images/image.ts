@@ -9,6 +9,19 @@ import { logicalChildrenNamed } from '../content.js';
 import type { DocxInlineImage, DocxFloat, DocxPageSize, DocxPageMargins } from '../model.js';
 import type { ParseContext } from '../document/context.js';
 
+/**
+ * Scale an inline image down so it fits the available width, preserving aspect
+ * ratio (Word shrinks an inline image to the text column). Smaller images are
+ * left untouched.
+ */
+export function fitImageWidth(img: DocxInlineImage, contentW: number): void {
+  if (img.widthPx > contentW && img.widthPx > 0) {
+    const scale = contentW / img.widthPx;
+    img.widthPx = contentW;
+    img.heightPx = img.heightPx * scale;
+  }
+}
+
 /** Extract inline images from a paragraph's runs, in order. */
 export function findImages(p: XmlNode, ctx: ParseContext): DocxInlineImage[] {
   const out: DocxInlineImage[] = [];

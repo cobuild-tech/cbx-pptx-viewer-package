@@ -11,7 +11,7 @@ import { twipToPx } from '../units.js';
 import { logicalChildren } from '../content.js';
 import { parseParagraph } from '../paragraphs/paragraph.js';
 import { parseTable, fitTableWidth } from '../tables/table.js';
-import { collectFloats } from '../images/image.js';
+import { collectFloats, fitImageWidth } from '../images/image.js';
 import type { DocxBlock, DocxFloat, DocxSection, DocxPageSize, DocxPageMargins } from '../model.js';
 import type { ParseContext } from './context.js';
 
@@ -38,6 +38,7 @@ export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
     const contentW = size.wPx - margins.leftPx - margins.rightPx;
     for (const block of current) {
       if (block.kind === 'table') fitTableWidth(block, contentW);
+      else if (block.kind === 'image') fitImageWidth(block, contentW);
     }
     sections.push({ index: sections.length, size, margins, blocks: current, ...hf });
     current = [];
