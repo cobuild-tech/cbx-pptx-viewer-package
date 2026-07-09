@@ -39,7 +39,19 @@ function buildDocx(): Uint8Array {
     ),
     'word/footer1.xml': strToU8(
       `<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
-        <w:p><w:r><w:t>Footer text</w:t></w:r></w:p>
+        <w:p>
+          <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+          <w:r><w:instrText xml:space="preserve"> STYLEREF Heading1 </w:instrText></w:r>
+          <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+          <w:r><w:t>Cached Title</w:t></w:r>
+          <w:r><w:fldChar w:fldCharType="end"/></w:r>
+          <w:r><w:tab/></w:r>
+          <w:r><w:fldChar w:fldCharType="begin"/></w:r>
+          <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+          <w:r><w:fldChar w:fldCharType="separate"/></w:r>
+          <w:r><w:t>1</w:t></w:r>
+          <w:r><w:fldChar w:fldCharType="end"/></w:r>
+        </w:p>
       </w:ftr>`,
     ),
     'word/styles.xml': strToU8(
@@ -130,7 +142,15 @@ describe('DocxDocument.load', () => {
     const header = section.header![0] as DocxParagraph;
     const footer = section.footer![0] as DocxParagraph;
     expect(header.runs.map((r) => r.text).join('')).toBe('Header text');
-    expect(footer.runs.map((r) => r.text).join('')).toBe('Footer text');
+    expect(footer.runs.map((r) => r.text).join('')).toBe('Cached Title1');
+  });
+
+  it('parses field characters and attaches field codes to runs', () => {
+    const footer = section.footer![0] as DocxParagraph;
+    const stylerefRun = footer.runs.find((r) => r.text === 'Cached Title')!;
+    const pageRun = footer.runs.find((r) => r.text === '1')!;
+    expect(stylerefRun.fieldCode?.trim()).toBe('STYLEREF Heading1');
+    expect(pageRun.fieldCode?.trim()).toBe('PAGE');
   });
 
   it('resolves the style cascade (Heading1: centered, bold, larger, colored)', () => {

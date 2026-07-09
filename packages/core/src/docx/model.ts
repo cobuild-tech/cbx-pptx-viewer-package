@@ -27,6 +27,7 @@ export type {
 /** A contiguous run of text with uniform character formatting (<w:r>). */
 export interface DocxRun {
   text: string;
+  fieldCode?: string;
   bold?: boolean;
   italic?: boolean;
   underline?: boolean;
@@ -197,6 +198,8 @@ export interface DocxPage {
   footer?: DocxBlock[];
   /** Page-anchored floating images drawn absolutely on the sheet. */
   floats?: DocxFloat[];
+  /** Resolved text for style references, keyed by style name (lowercased). */
+  resolvedStyles?: Record<string, string>;
 }
 
 // ─── Document ──────────────────────────────────────────────────────────────────

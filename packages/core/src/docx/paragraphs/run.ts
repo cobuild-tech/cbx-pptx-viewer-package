@@ -11,11 +11,18 @@ import { rPrFrom, mergeRun, type RunProps } from '../styles/styles.js';
 import type { DocxRun } from '../model.js';
 import type { ParseContext } from '../document/context.js';
 
+export interface FieldState {
+  inField: boolean;
+  fieldInstr: string;
+  inSeparate: boolean;
+}
+
 /** Parse the runs inside a paragraph child (<w:r> or <w:hyperlink>). */
 export function parseRunContainer(
   node: XmlNode,
   baseRun: RunProps,
   ctx: ParseContext,
+  fieldState?: FieldState,
   hyperlink?: string,
 ): DocxRun[] {
   const name = localName(node.name);
@@ -25,21 +32,55 @@ export function parseRunContainer(
     const anchor = attr(node, 'anchor');
     const target = href ?? (anchor ? `#${anchor}` : undefined);
     const out: DocxRun[] = [];
-    for (const r of children(node, 'r')) out.push(...parseRun(r, baseRun, ctx, target));
+    for (const r of children(node, 'r')) out.push(...parseRun(r, baseRun, ctx, fieldState, target));
     return out;
   }
-  if (name === 'r') return parseRun(node, baseRun, ctx, hyperlink);
+  if (name === 'r') return parseRun(node, baseRun, ctx, fieldState, hyperlink);
   return [];
 }
 
-function parseRun(r: XmlNode, baseRun: RunProps, ctx: ParseContext, hyperlink?: string): DocxRun[] {
+function parseRun(
+  r: XmlNode,
+  baseRun: RunProps,
+  ctx: ParseContext,
+  fieldState?: FieldState,
+  hyperlink?: string,
+): DocxRun[] {
   const props = mergeRun(baseRun, resolveRunStyle(r, ctx));
   const out: DocxRun[] = [];
   let pendingBreak = false;
   let pendingTab = false;
 
   for (const node of r.children) {
-    switch (localName(node.name)) {
+    const tagName = localName(node.name);
+    switch (tagName) {
+      case 'fldChar': {
+        const type = attr(node, 'fldCharType');
+        if (type === 'begin') {
+          if (fieldState) {
+            fieldState.inField = true;
+            fieldState.fieldInstr = '';
+            fieldState.inSeparate = false;
+          }
+        } else if (type === 'separate') {
+          if (fieldState) {
+            fieldState.inSeparate = true;
+          }
+        } else if (type === 'end') {
+          if (fieldState) {
+            fieldState.inField = false;
+            fieldState.inSeparate = false;
+            fieldState.fieldInstr = '';
+          }
+        }
+        break;
+      }
+      case 'instrText': {
+        if (fieldState && fieldState.inField) {
+          fieldState.fieldInstr += node.text ?? '';
+        }
+        break;
+      }
       case 'br':
         pendingBreak = true;
         break;
@@ -47,7 +88,11 @@ function parseRun(r: XmlNode, baseRun: RunProps, ctx: ParseContext, hyperlink?: 
         pendingTab = true;
         break;
       case 't': {
-        out.push(makeRun(node.text ?? '', props, hyperlink, pendingBreak, pendingTab));
+        const run = makeRun(node.text ?? '', props, hyperlink, pendingBreak, pendingTab);
+        if (fieldState && fieldState.inField && fieldState.inSeparate) {
+          run.fieldCode = fieldState.fieldInstr;
+        }
+        out.push(run);
         pendingBreak = false;
         pendingTab = false;
         break;

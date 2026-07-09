@@ -45,7 +45,7 @@ function createMeasurer(): Measurer {
   el.style.fontFamily = SHEET_FONT.fontFamily;
   el.style.fontSize = SHEET_FONT.fontSize;
   el.style.lineHeight = SHEET_FONT.lineHeight;
-  (el.style as CSSStyleDeclaration & { overflowWrap: string }).overflowWrap = 'break-word';
+  (el.style as CSSStyleDeclaration & { overflowWrap: string }).overflowWrap = 'normal';
   host.appendChild(el);
   (document.body ?? document.documentElement).appendChild(host);
 
@@ -72,6 +72,8 @@ function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): D
   let current: DocxBlock[] = [];
   let usedH = 0;
 
+  const lastSeenStyleText: Record<string, string> = {};
+
   const makePage = (): DocxPage => ({
     index: pages.length,
     size: section.size,
@@ -82,7 +84,46 @@ function paginateSection(section: DocxSection, deps: RenderDeps, m: Measurer): D
     ...(section.floats ? { floats: section.floats } : {}),
   });
   const flush = () => {
-    pages.push(makePage());
+    const pageResolved = { ...lastSeenStyleText };
+    const firstOccurrences: Record<string, string> = {};
+
+    const checkBlock = (b: DocxBlock) => {
+      if (b.kind === 'paragraph') {
+        const style = b.styleName?.toLowerCase();
+        if (style) {
+          const text = b.runs.map(r => r.text).join('').trim();
+          if (text) {
+            if (firstOccurrences[style] === undefined) {
+              firstOccurrences[style] = text;
+            }
+            lastSeenStyleText[style] = text;
+          }
+        }
+      } else if (b.kind === 'table') {
+        for (const row of b.rows) {
+          for (const cell of row) {
+            if (cell) {
+              for (const sub of cell.content) {
+                checkBlock(sub);
+              }
+            }
+          }
+        }
+      }
+    };
+
+    for (const b of current) {
+      checkBlock(b);
+    }
+
+    for (const [style, text] of Object.entries(firstOccurrences)) {
+      pageResolved[style] = text;
+    }
+
+    const pg = makePage();
+    pg.resolvedStyles = pageResolved;
+    pages.push(pg);
+
     current = [];
     usedH = 0;
   };

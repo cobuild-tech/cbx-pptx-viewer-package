@@ -42,11 +42,14 @@ export function collectFloats(
   margins: DocxPageMargins,
 ): DocxFloat[] {
   const out: DocxFloat[] = [];
+  const tag = localName(root.name);
+  const context = tag === 'hdr' ? 'header' : tag === 'ftr' ? 'footer' : 'body';
+
   const walk = (n: XmlNode) => {
     if (localName(n.name) === 'drawing') {
       const anchor = child(n, 'anchor');
       if (anchor) {
-        const f = fromAnchor(anchor, ctx, size, margins);
+        const f = fromAnchor(anchor, ctx, size, margins, context);
         if (f) out.push(f);
       }
     }
@@ -84,6 +87,7 @@ function fromAnchor(
   ctx: ParseContext,
   size: DocxPageSize,
   margins: DocxPageMargins,
+  context: 'header' | 'footer' | 'body',
 ): DocxFloat | undefined {
   const rel = ctx.rel(blipEmbed(anchor));
   if (!rel) return undefined;
@@ -92,8 +96,8 @@ function fromAnchor(
   const wPx = emuToPx(attrNum(ext, 'cx') ?? 0);
   const hPx = emuToPx(attrNum(ext, 'cy') ?? 0);
 
-  const xPx = resolvePos(child(anchor, 'positionH'), 'h', wPx, size, margins);
-  const yPx = resolvePos(child(anchor, 'positionV'), 'v', hPx, size, margins);
+  const xPx = resolvePos(child(anchor, 'positionH'), 'h', wPx, size, margins, context);
+  const yPx = resolvePos(child(anchor, 'positionV'), 'v', hPx, size, margins, context);
 
   const docPr = child(anchor, 'docPr');
   const alt = attr(docPr, 'descr') ?? attr(docPr, 'name');
@@ -116,13 +120,23 @@ function resolvePos(
   sizePx: number,
   size: DocxPageSize,
   margins: DocxPageMargins,
+  context: 'header' | 'footer' | 'body',
 ): number {
   const relFrom = attr(pos, 'relativeFrom') ?? (axis === 'h' ? 'column' : 'paragraph');
   const pageExtent = axis === 'h' ? size.wPx : size.hPx;
   const startMargin = axis === 'h' ? margins.leftPx : margins.topPx;
   const endMargin = axis === 'h' ? margins.rightPx : margins.bottomPx;
+  
   // Everything except 'page' is relative to the margin/text area start.
-  const base = relFrom === 'page' ? 0 : startMargin;
+  let base = relFrom === 'page' ? 0 : startMargin;
+
+  if (axis === 'v' && relFrom !== 'page') {
+    if (context === 'header') {
+      base = margins.headerPx;
+    } else if (context === 'footer') {
+      base = size.hPx - margins.footerPx - sizePx;
+    }
+  }
 
   const offset = numText(child(pos, 'posOffset'));
   if (offset !== undefined) return base + emuToPx(offset);

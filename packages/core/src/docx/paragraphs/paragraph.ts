@@ -7,7 +7,7 @@ import { child, attr, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx, twipToPt, halfPtToPt, borderSzToPx } from '../units.js';
 import { logicalChildren } from '../content.js';
 import { pPrFrom, rPrFrom, mergePara, mergeRun, type ParaProps, type RawBorder } from '../styles/styles.js';
-import { parseRunContainer } from './run.js';
+import { parseRunContainer, type FieldState } from './run.js';
 import { findImages } from '../images/image.js';
 import type { DocxBlock, DocxParagraph, DocxRun, Stroke, TextAlign } from '../model.js';
 import type { ParseContext } from '../document/context.js';
@@ -20,10 +20,11 @@ export function parseParagraph(p: XmlNode, ctx: ParseContext): DocxBlock[] {
 
   const baseRun = mergeRun(ctx.styles.resolveParaRunProps(styleId), rPrFrom(child(pPr, 'rPr')));
 
+  const fieldState: FieldState = { inField: false, fieldInstr: '', inSeparate: false };
   const runs: DocxRun[] = [];
   for (const node of logicalChildren(p)) {
     const name = localName(node.name);
-    if (name === 'r' || name === 'hyperlink') runs.push(...parseRunContainer(node, baseRun, ctx, undefined));
+    if (name === 'r' || name === 'hyperlink') runs.push(...parseRunContainer(node, baseRun, ctx, fieldState, undefined));
   }
 
   const para: DocxParagraph = {

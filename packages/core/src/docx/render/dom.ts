@@ -57,7 +57,7 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
   s.fontSize = SHEET_FONT.fontSize;
   s.lineHeight = SHEET_FONT.lineHeight;
   s.overflow = 'hidden';
-  s.overflowWrap = 'break-word';
+  s.overflowWrap = 'normal';
 
   const contentW = page.size.wPx - page.margins.leftPx - page.margins.rightPx;
 
@@ -68,13 +68,13 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
   }
 
   if (page.header && page.header.length) {
-    sheet.appendChild(marginBand(page.header, deps, contentW, page.margins.leftPx, { top: px(page.margins.headerPx) }));
+    sheet.appendChild(marginBand(page.header, deps, contentW, page.margins.leftPx, { top: px(page.margins.headerPx) }, page.index, page.resolvedStyles));
   }
   if (page.footer && page.footer.length) {
-    sheet.appendChild(marginBand(page.footer, deps, contentW, page.margins.leftPx, { bottom: px(page.margins.footerPx) }));
+    sheet.appendChild(marginBand(page.footer, deps, contentW, page.margins.leftPx, { bottom: px(page.margins.footerPx) }, page.index, page.resolvedStyles));
   }
 
-  for (const block of page.elements) sheet.appendChild(renderBlock(block, deps));
+  for (const block of page.elements) sheet.appendChild(renderBlock(block, deps, page.index, page.resolvedStyles));
   return sheet;
 }
 
@@ -85,6 +85,8 @@ function marginBand(
   contentW: number,
   leftPx: number,
   pos: { top?: string; bottom?: string },
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
 ): HTMLDivElement {
   const band = document.createElement('div');
   const s = band.style;
@@ -94,23 +96,32 @@ function marginBand(
   if (pos.top) s.top = pos.top;
   if (pos.bottom) s.bottom = pos.bottom;
   s.color = '#000';
-  for (const block of blocks) band.appendChild(renderBlock(block, deps));
+  for (const block of blocks) band.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
   return band;
 }
 
 /** Render a single block to a DOM element (also used by the paginator to measure). */
-export function renderBlock(block: DocxBlock, deps: RenderDeps): HTMLElement {
+export function renderBlock(
+  block: DocxBlock,
+  deps: RenderDeps,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
   switch (block.kind) {
     case 'paragraph':
-      return renderParagraph(block);
+      return renderParagraph(block, pageIndex, resolvedStyles);
     case 'table':
-      return renderTable(block, deps);
+      return renderTable(block, deps, pageIndex, resolvedStyles);
     case 'image':
       return renderImage(block, deps);
   }
 }
 
-function renderParagraph(p: DocxParagraph): HTMLElement {
+function renderParagraph(
+  p: DocxParagraph,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
   const el = document.createElement('div');
   const s = el.style;
   s.position = 'relative';
@@ -146,12 +157,17 @@ function renderParagraph(p: DocxParagraph): HTMLElement {
     // Preserve the height of an empty line.
     el.appendChild(document.createTextNode('​'));
   } else {
-    for (const run of p.runs) appendRun(el, run);
+    for (const run of p.runs) appendRun(el, run, pageIndex, resolvedStyles);
   }
   return el;
 }
 
-function appendRun(parent: HTMLElement, run: DocxRun): void {
+function appendRun(
+  parent: HTMLElement,
+  run: DocxRun,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): void {
   if (run.breakBefore) parent.appendChild(document.createElement('br'));
   if (run.tabBefore) {
     const tab = document.createElement('span');
@@ -159,10 +175,25 @@ function appendRun(parent: HTMLElement, run: DocxRun): void {
     tab.style.width = '0.5in';
     parent.appendChild(tab);
   }
-  if (!run.text) return;
+
+  let displayText = run.text;
+  if (run.fieldCode) {
+    const code = run.fieldCode.trim();
+    if (/^page$/i.test(code)) {
+      displayText = pageIndex !== undefined ? String(pageIndex + 1) : '1';
+    } else {
+      const match = /^\s*styleref\s+(?:"([^"]+)"|'([^']+)'|([^\s]+))/i.exec(code);
+      if (match) {
+        const styleName = (match[1] || match[2] || match[3] || '').toLowerCase();
+        displayText = resolvedStyles?.[styleName] ?? run.text;
+      }
+    }
+  }
+
+  if (!displayText) return;
 
   const span = document.createElement('span');
-  span.textContent = run.text;
+  span.textContent = displayText;
   const s = span.style;
   if (run.bold) s.fontWeight = 'bold';
   if (run.italic) s.fontStyle = 'italic';
@@ -197,7 +228,12 @@ function appendRun(parent: HTMLElement, run: DocxRun): void {
   }
 }
 
-function renderTable(table: DocxTable, deps: RenderDeps): HTMLElement {
+function renderTable(
+  table: DocxTable,
+  deps: RenderDeps,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
   const t = document.createElement('table');
   t.style.borderCollapse = 'collapse';
   t.style.tableLayout = 'fixed';
@@ -218,7 +254,7 @@ function renderTable(table: DocxTable, deps: RenderDeps): HTMLElement {
     const tr = document.createElement('tr');
     for (const cell of row) {
       if (cell === null) continue; // covered by a span
-      tr.appendChild(renderCell(cell, deps));
+      tr.appendChild(renderCell(cell, deps, pageIndex, resolvedStyles));
     }
     tbody.appendChild(tr);
   }
@@ -226,7 +262,12 @@ function renderTable(table: DocxTable, deps: RenderDeps): HTMLElement {
   return t;
 }
 
-function renderCell(cell: DocxTableCell, deps: RenderDeps): HTMLElement {
+function renderCell(
+  cell: DocxTableCell,
+  deps: RenderDeps,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
   const td = document.createElement('td');
   if (cell.colSpan > 1) td.colSpan = cell.colSpan;
   if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
