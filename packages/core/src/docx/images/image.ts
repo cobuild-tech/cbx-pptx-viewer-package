@@ -1,65 +1,221 @@
 /**
- * Inline image parser for WordprocessingML.
- *
- * Inline images live inside <w:drawing><wp:inline>...</wp:inline></w:drawing>.
- * Floating images (<wp:anchor>) are not yet supported.
+ * Inline image parsing: <w:drawing> (DrawingML wp:inline / wp:anchor) ->
+ * DocxInlineImage. Extent is in EMU; the media part is resolved from the blip's
+ * r:embed relationship on the document part.
  */
-import { child, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
+import { child, attr, attrNum, attrBool, path, localName, type XmlNode } from '../../oxml/xml.js';
 import { emuToPx } from '../../oxml/units.js';
-import type { DocxInlineImage } from '../model.js';
+import { logicalChildrenNamed } from '../content.js';
+import type { DocxInlineImage, DocxFloat, DocxPageSize, DocxPageMargins } from '../model.js';
+import type { ParseContext } from '../document/context.js';
 
 /**
- * Parse a <w:drawing> element into a DocxInlineImage.
- * Returns null if it is not an inline image or cannot be resolved.
+ * Scale an inline image down so it fits the available width, preserving aspect
+ * ratio (Word shrinks an inline image to the text column). Smaller images are
+ * left untouched.
  */
-export function parseDrawing(
-  drawingEl: XmlNode,
-  resolveImage: (relId: string) => string | undefined,
-): DocxInlineImage | null {
-  // Support both inline (<wp:inline>) and floating/anchored (<wp:anchor>) images.
-  const inline = child(drawingEl, 'inline') ?? child(drawingEl, 'anchor');
-  if (!inline) return null;
+export function fitImageWidth(img: DocxInlineImage, contentW: number): void {
+  if (img.widthPx > contentW && img.widthPx > 0) {
+    const scale = contentW / img.widthPx;
+    img.widthPx = contentW;
+    img.heightPx = img.heightPx * scale;
+  }
+}
 
-  const extent = child(inline, 'extent');
-  const cx = attrNum(extent, 'cx') ?? 0;
-  const cy = attrNum(extent, 'cy') ?? 0;
+/** Extract inline images from a paragraph's runs, in order. */
+export function findImages(p: XmlNode, ctx: ParseContext): DocxInlineImage[] {
+  const out: DocxInlineImage[] = [];
+  for (const r of logicalChildrenNamed(p, 'r')) {
+    // <w:drawing> (DrawingML) and legacy <w:pict>/<v:shape> (VML) image runs.
+    for (const node of r.children) {
+      const name = localName(node.name);
+      if (name === 'drawing') {
+        // Anchored (floating) images are hoisted to page floats in header/footer
+        // parsing; skip them here so they don't also render inline.
+        if (ctx.hoistAnchors && child(node, 'anchor')) continue;
+        const img = fromDrawing(node, ctx);
+        if (img) out.push(img);
+      } else if (name === 'pict') {
+        const img = fromPict(node, ctx);
+        if (img) out.push(img);
+      }
+    }
+  }
+  return out;
+}
 
-  // Navigate: <a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="..."/>
-  const graphic = child(inline, 'graphic');
-  const graphicData = child(graphic, 'graphicData');
-  if (!graphicData) return null;
+/**
+ * Collect anchored (floating) images anywhere under `root`, resolved to
+ * absolute page coordinates using the section's size/margins.
+ */
+export function collectFloats(
+  root: XmlNode,
+  ctx: ParseContext,
+  size: DocxPageSize,
+  margins: DocxPageMargins,
+): DocxFloat[] {
+  const out: DocxFloat[] = [];
+  const tag = localName(root.name);
+  const context = tag === 'hdr' ? 'header' : tag === 'ftr' ? 'footer' : 'body';
 
-  // pic:pic may be nested directly or inside another wrapper.
-  const picPic = findDescendantByLocalName(graphicData, 'pic');
-  if (!picPic) return null;
+  const walk = (n: XmlNode) => {
+    if (localName(n.name) === 'drawing') {
+      const anchor = child(n, 'anchor');
+      if (anchor) {
+        const f = fromAnchor(anchor, ctx, size, margins, context);
+        if (f) out.push(f);
+      }
+    }
+    for (const c of n.children) walk(c);
+  };
+  walk(root);
+  return out;
+}
 
-  const blipFill = child(picPic, 'blipFill');
-  const blip = child(blipFill, 'blip');
-  if (!blip) return null;
+function fromDrawing(drawing: XmlNode, ctx: ParseContext): DocxInlineImage | undefined {
+  const anchor = child(drawing, 'inline') ?? child(drawing, 'anchor');
+  if (!anchor) return undefined;
 
-  const relId = attr(blip, 'r:embed') ?? attr(blip, 'embed');
-  if (!relId) return null;
+  const ext = child(anchor, 'extent');
+  const cx = attrNum(ext, 'cx');
+  const cy = attrNum(ext, 'cy');
 
-  const part = resolveImage(relId);
-  if (!part) return null;
+  const rel = ctx.rel(blipEmbed(anchor));
+  if (!rel) return undefined;
 
-  const docDescr = child(inline, 'docPr');
-  const alt = attr(docDescr, 'descr') ?? attr(docDescr, 'title');
+  const docPr = child(anchor, 'docPr');
+  const alt = attr(docPr, 'descr') ?? attr(docPr, 'name');
 
   return {
     kind: 'image',
-    part,
-    widthPx: emuToPx(cx),
-    heightPx: emuToPx(cy),
-    alt: alt ?? undefined,
+    part: rel.target,
+    widthPx: cx ? emuToPx(cx) : 0,
+    heightPx: cy ? emuToPx(cy) : 0,
+    ...(alt ? { alt } : {}),
   };
 }
 
-function findDescendantByLocalName(node: XmlNode, name: string): XmlNode | undefined {
+function fromAnchor(
+  anchor: XmlNode,
+  ctx: ParseContext,
+  size: DocxPageSize,
+  margins: DocxPageMargins,
+  context: 'header' | 'footer' | 'body',
+): DocxFloat | undefined {
+  const rel = ctx.rel(blipEmbed(anchor));
+  if (!rel) return undefined;
+
+  const ext = child(anchor, 'extent');
+  const wPx = emuToPx(attrNum(ext, 'cx') ?? 0);
+  const hPx = emuToPx(attrNum(ext, 'cy') ?? 0);
+
+  const xPx = resolvePos(child(anchor, 'positionH'), 'h', wPx, size, margins, context);
+  const yPx = resolvePos(child(anchor, 'positionV'), 'v', hPx, size, margins, context);
+
+  const docPr = child(anchor, 'docPr');
+  const alt = attr(docPr, 'descr') ?? attr(docPr, 'name');
+
+  return {
+    part: rel.target,
+    xPx,
+    yPx,
+    wPx,
+    hPx,
+    behindDoc: attrBool(anchor, 'behindDoc', false),
+    ...(alt ? { alt } : {}),
+  };
+}
+
+/** Resolve <wp:positionH>/<wp:positionV> to a page-coordinate offset in px. */
+function resolvePos(
+  pos: XmlNode | undefined,
+  axis: 'h' | 'v',
+  sizePx: number,
+  size: DocxPageSize,
+  margins: DocxPageMargins,
+  context: 'header' | 'footer' | 'body',
+): number {
+  const relFrom = attr(pos, 'relativeFrom') ?? (axis === 'h' ? 'column' : 'paragraph');
+  const pageExtent = axis === 'h' ? size.wPx : size.hPx;
+  const startMargin = axis === 'h' ? margins.leftPx : margins.topPx;
+  const endMargin = axis === 'h' ? margins.rightPx : margins.bottomPx;
+  
+  // Everything except 'page' is relative to the margin/text area start.
+  let base = relFrom === 'page' ? 0 : startMargin;
+
+  if (axis === 'v' && relFrom !== 'page') {
+    if (context === 'header') {
+      base = margins.headerPx;
+    } else if (context === 'footer') {
+      base = size.hPx - margins.footerPx - sizePx;
+    }
+  }
+
+  const offset = numText(child(pos, 'posOffset'));
+  if (offset !== undefined) return base + emuToPx(offset);
+
+  const align = child(pos, 'align')?.text?.trim();
+  switch (align) {
+    case 'center':
+      return (pageExtent - sizePx) / 2;
+    case 'right':
+    case 'bottom':
+      return pageExtent - endMargin - sizePx;
+    case 'left':
+    case 'top':
+      return base;
+    default:
+      return base;
+  }
+}
+
+function blipEmbed(anchor: XmlNode): string | undefined {
+  const blip = path(anchor, 'graphic/graphicData/pic/blipFill/blip');
+  return attr(blip, 'embed') ?? attr(blip, 'link');
+}
+
+function numText(node: XmlNode | undefined): number | undefined {
+  if (!node) return undefined;
+  const n = Number(node.text);
+  return Number.isFinite(n) ? n : undefined;
+}
+
+/** Legacy VML image: <w:pict><v:shape style="width:..pt;height:..pt"><v:imagedata r:id=".."/>. */
+function fromPict(pict: XmlNode, ctx: ParseContext): DocxInlineImage | undefined {
+  const shape = findFirst(pict, (n) => localName(n.name) === 'imagedata');
+  if (!shape) return undefined;
+  const rel = ctx.rel(attr(shape, 'id'));
+  if (!rel) return undefined;
+
+  // Size comes from the parent shape's CSS-ish `style` (in points).
+  const styled = findFirst(pict, (n) => attr(n, 'style') !== undefined);
+  const style = attr(styled, 'style') ?? '';
+  const w = ptStyle(style, 'width');
+  const h = ptStyle(style, 'height');
+  const alt = attr(shape, 'title') ?? attr(shape, 'alt');
+
+  return {
+    kind: 'image',
+    part: rel.target,
+    widthPx: w ?? 0,
+    heightPx: h ?? 0,
+    ...(alt ? { alt } : {}),
+  };
+}
+
+/** Parse `width:123pt` (or px) out of a VML style string, returning px. */
+function ptStyle(style: string, prop: string): number | undefined {
+  const m = new RegExp(`${prop}\\s*:\\s*([0-9.]+)(pt|px)?`, 'i').exec(style);
+  if (!m) return undefined;
+  const val = parseFloat(m[1]!);
+  return m[2]?.toLowerCase() === 'px' ? val : val * (96 / 72);
+}
+
+function findFirst(node: XmlNode, pred: (n: XmlNode) => boolean): XmlNode | undefined {
   for (const c of node.children) {
-    if (localName(c.name) === name) return c;
-    const found = findDescendantByLocalName(c, name);
-    if (found) return found;
+    if (pred(c)) return c;
+    const nested = findFirst(c, pred);
+    if (nested) return nested;
   }
   return undefined;
 }

@@ -10,8 +10,13 @@
  */
 
 /** 1 twip = 1/20 pt = 1/1440 inch = 96/1440 px at 96 DPI. */
-export function twipsToPx(twips: number): number {
+export function twipToPx(twips: number): number {
   return twips / 15;
+}
+
+/** 1 twip = 1/20 pt. */
+export function twipToPt(twips: number): number {
+  return twips / 20;
 }
 
 /** Word font size attribute (<w:sz>) stores half-points. */
@@ -19,7 +24,7 @@ export function halfPtToPt(halfPt: number): number {
   return halfPt / 2;
 }
 
-/** Word border width (<w:sz>) stores eighths of a point. */
+/** Word border width (<w:sz>) stores eighths of a point; convert to px at 96 DPI. */
 export function borderSzToPx(sz: number): number {
   return (sz / 8) * (96 / 72);
 }

@@ -1,208 +1,137 @@
 /**
- * Paragraph parser for WordprocessingML.
- *
- * Converts a <w:p> element into a DocxParagraph IR node, resolving style
- * inheritance, list numbering, hyperlinks, and inline images.
+ * Paragraph parsing: <w:p> -> DocxParagraph (+ any inline images as trailing
+ * image blocks). Resolves the paragraph property cascade, the run base props
+ * its runs inherit, and the pre-rendered list marker from numbering state.
  */
 import { child, attr, localName, type XmlNode } from '../../oxml/xml.js';
-import { twipsToPx } from '../units.js';
-import type { DocxParagraph, DocxBlock, DocxRun } from '../model.js';
-import type { Stroke } from '../model.js';
-import { StyleMap, mergeParaProps, mergeRunProps } from '../styles/styles.js';
-import type { ParaBorderSide } from '../styles/styles.js';
-import { NumberingMap } from '../numbering/numbering.js';
-import { parseRun, runHasPageBreak } from './run.js';
-import { parseDrawing } from '../images/image.js';
-import { encodeNodeId } from '../edit/nodeId.js';
-
-export interface ParagraphParseCtx {
-  styles: StyleMap;
-  numbering: NumberingMap;
-  /** Counter state for auto-numbered lists; mutated during parsing. */
-  listCounters: Map<string, number>;
-  resolveImage: (relId: string) => string | undefined;
-  resolveHyperlink: (relId: string) => string | undefined;
-  /** OPC part this content lives in (for nodeId stamping in editable mode). */
-  partPath?: string;
-}
-
-export interface ParagraphResult {
-  paragraphs: DocxParagraph[];
-  /** True if the paragraph ends with an explicit page break. */
-  endsWithPageBreak: boolean;
-}
+import { twipToPx, twipToPt, halfPtToPt, borderSzToPx } from '../units.js';
+import { logicalChildren } from '../content.js';
+import { pPrFrom, rPrFrom, mergePara, mergeRun, type ParaProps, type RunProps, type RawBorder } from '../styles/styles.js';
+import { parseRunContainer, type FieldState } from './run.js';
+import { findImages } from '../images/image.js';
+import type { DocxBlock, DocxParagraph, DocxRun, Stroke, TextAlign } from '../model.js';
+import type { ParseContext } from '../document/context.js';
 
 /**
- * Parse a <w:p> element. May return multiple DocxParagraphs if the paragraph
- * contains an explicit page break mid-text (rare but possible).
+ * Formatting a table style contributes to the paragraphs in a cell. It sits
+ * BELOW the paragraph's own style and direct props in the cascade (Word applies
+ * table styles before paragraph styles), so a cell paragraph can override it.
  */
-export function parseParagraph(
-  pEl: XmlNode,
-  ctx: ParagraphParseCtx,
-  /** Child-index path to this `<w:p>` from the part root (editable mode). */
-  path?: number[],
-): ParagraphResult {
-  const nodeId = path && ctx.partPath ? encodeNodeId(ctx.partPath, path) : undefined;
-  const runNodeId = (...suffix: number[]): string | undefined =>
-    path && ctx.partPath ? encodeNodeId(ctx.partPath, [...path, ...suffix]) : undefined;
-  const pPr = child(pEl, 'pPr');
-
-  // Resolve base style.
-  const styleRef =
-    attr(child(pPr, 'pStyle'), 'w:val') ?? attr(child(pPr, 'pStyle'), 'val') ?? 'Normal';
-  const baseStyle = ctx.styles.get(styleRef);
-
-  // Merge paragraph properties onto base.
-  const para = { ...baseStyle.para };
-  if (pPr) mergeParaProps(para, pPr);
-
-  // Resolve list numbering.
-  const numId = para.numId;
-  const ilvl = para.ilvl ?? 0;
-  let bullet = undefined;
-  let listIndentLeftPx: number | undefined;
-  let listIndentFirstLinePx: number | undefined;
-
-  if (numId !== undefined && numId !== 0) {
-    const level = ctx.numbering.resolve(numId, ilvl);
-    if (level) {
-      bullet = ctx.numbering.toBullet(level, ctx.listCounters, numId, ilvl);
-      listIndentLeftPx = level.indentLeftPx;
-      listIndentFirstLinePx = level.indentFirstLinePx;
-    }
-  }
-
-  // Run-level base style from the paragraph style.
-  const baseRun = { ...baseStyle.run };
-  // Merge paragraph's rPr default run props (pPr/rPr).
-  const pRpr = child(pPr, 'rPr');
-  if (pRpr) mergeRunProps(baseRun, pRpr);
-
-  // Parse runs, hyperlinks, and drawing elements.
-  const runs: DocxRun[] = [];
-  let endsWithPageBreak = false;
-  const paragraphs: DocxParagraph[] = [];
-
-  // Check for paragraph-level page break.
-  const pageBreakBeforeEl = child(pPr, 'pageBreakBefore');
-  let pageBreakBefore = pageBreakBeforeEl !== undefined;
-  if (pageBreakBeforeEl) {
-    const val = attr(pageBreakBeforeEl, 'w:val') ?? attr(pageBreakBeforeEl, 'val');
-    pageBreakBefore = val === undefined || (val !== '0' && val !== 'false');
-  }
-
-  for (let childIdx = 0; childIdx < pEl.children.length; childIdx++) {
-    const node = pEl.children[childIdx]!;
-    const name = localName(node.name);
-
-    if (name === 'r') {
-      // Check for a page break inside this run — flush what we have and signal.
-      if (runHasPageBreak(node)) {
-        // Flush current runs as a paragraph before the break.
-        if (runs.length > 0) {
-          paragraphs.push(buildParagraph(runs.slice(), baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx, nodeId));
-          runs.length = 0;
-          pageBreakBefore = false;
-          bullet = undefined;
-        }
-        endsWithPageBreak = true;
-        continue;
-      }
-      const run = parseRun(node, baseRun, ctx.resolveImage, ctx.styles) as DocxRun | null;
-      if (run) {
-        run.nodeId = runNodeId(childIdx);
-        runs.push(run);
-      }
-
-    } else if (name === 'hyperlink') {
-      const relId = attr(node, 'r:id') ?? attr(node, 'id');
-      const url = relId ? ctx.resolveHyperlink(relId) : undefined;
-      for (let hIdx = 0; hIdx < node.children.length; hIdx++) {
-        const rEl = node.children[hIdx]!;
-        if (localName(rEl.name) !== 'r') continue;
-        const run = parseRun(rEl, baseRun, ctx.resolveImage, ctx.styles) as DocxRun | null;
-        if (run) {
-          if (url) run.hyperlink = url;
-          run.nodeId = runNodeId(childIdx, hIdx);
-          runs.push(run);
-        }
-      }
-
-    } else if (name === 'drawing') {
-      const image = parseDrawing(node, ctx.resolveImage);
-      if (image) {
-        // Flush preceding text runs as a paragraph, then the image is its own block.
-        // For simplicity, inline images are appended as a run with a special marker.
-        // We embed a placeholder text run with image metadata via a custom approach:
-        // wrap the image inline with the surrounding text by just noting it.
-        // Real approach: push current runs, push image block separately.
-        // Since DocxParagraph only has runs, we add the image as a top-level block
-        // outside this paragraph. Signal via side-channel? Instead we return the
-        // paragraphs array and include inline images as separate blocks.
-        // We flush runs so far, then the image block follows outside this function.
-        // → handled at body level by checking for 'drawing' nodes during paragraph iteration.
-      }
-    }
-  }
-
-  paragraphs.push(buildParagraph(runs, baseStyle.name, para, baseRun, bullet, ilvl, pageBreakBefore, listIndentLeftPx, listIndentFirstLinePx, nodeId));
-
-  return { paragraphs, endsWithPageBreak };
+export interface TableBase {
+  pPr: Partial<ParaProps>;
+  rPr: Partial<RunProps>;
 }
 
-function buildParagraph(
-  runs: DocxRun[],
-  styleName: string,
-  para: ReturnType<typeof import('../styles/styles.js').StyleMap.prototype.get>['para'],
-  baseRun: ReturnType<typeof import('../styles/styles.js').StyleMap.prototype.get>['run'],
-  bullet: DocxParagraph['bullet'],
-  level: number,
-  pageBreakBefore: boolean,
-  listIndentLeftPx: number | undefined,
-  listIndentFirstLinePx: number | undefined,
-  nodeId: string | undefined,
-): DocxParagraph {
-  return {
+export function parseParagraph(p: XmlNode, ctx: ParseContext, tableBase?: TableBase): DocxBlock[] {
+  const pPr = child(p, 'pPr');
+  const direct = pPrFrom(pPr);
+  const styleId = direct.styleId;
+
+  // Cascade: docDefaults -> table style -> paragraph style -> direct.
+  const styleResolved = ctx.styles.resolveParaProps(styleId);
+  const resolved = tableBase
+    ? mergePara(mergePara(tableBase.pPr as ParaProps, styleResolved), direct)
+    : mergePara(styleResolved, direct);
+
+  // Text runs inherit docDefaults -> (table style) -> paragraph style. Word's
+  // paragraph-mark rPr formats only the mark; we fold it in for the body path
+  // (long-standing behaviour) but not inside table cells, where doing so would
+  // wrongly override a conditional format like firstRow's white text.
+  const baseRun = tableBase
+    ? mergeRun(tableBase.rPr as RunProps, ctx.styles.resolveParaRunProps(styleId))
+    : mergeRun(ctx.styles.resolveParaRunProps(styleId), rPrFrom(child(pPr, 'rPr')));
+
+  const fieldState: FieldState = { inField: false, fieldInstr: '', inSeparate: false };
+  const runs: DocxRun[] = [];
+  for (const node of logicalChildren(p)) {
+    const name = localName(node.name);
+    if (name === 'r' || name === 'hyperlink') runs.push(...parseRunContainer(node, baseRun, ctx, fieldState, undefined));
+  }
+
+  const para: DocxParagraph = {
     kind: 'paragraph',
     runs,
-    nodeId,
-    styleName,
-    baseFontFamily: baseRun.fontAscii ?? baseRun.fontHAnsi,
-    baseFontSizePt: baseRun.sizePt,
-    baseBold: baseRun.bold,
-    baseItalic: baseRun.italic,
-    baseColorHex: baseRun.colorHex,
-    align: para.align,
-    indentLeftPx: listIndentLeftPx ?? para.indentLeftPx,
-    indentFirstLinePx: listIndentFirstLinePx ?? para.indentFirstLinePx,
-    spaceBeforePt: para.spaceBeforePt,
-    spaceAfterPt: para.spaceAfterPt,
-    lineSpacingPct: para.lineSpacingPct,
-    lineSpacingPt: para.lineSpacingPt,
-    bullet,
-    level: bullet ? level : undefined,
-    pageBreakBefore: pageBreakBefore || undefined,
-    shadingHex: para.shadingHex,
-    indentRightPx: para.indentRightPx,
-    contextualSpacing: para.contextualSpacing,
-    paraBorders: para.pBdr ? buildParaBorders(para.pBdr) : undefined,
+    styleName: ctx.styles.styleName(styleId),
   };
+
+  if (baseRun.font) para.baseFontFamily = baseRun.font;
+  if (baseRun.sizeHalfPt !== undefined) para.baseFontSizePt = halfPtToPt(baseRun.sizeHalfPt);
+  if (baseRun.bold) para.baseBold = true;
+  if (baseRun.italic) para.baseItalic = true;
+  if (baseRun.colorHex) para.baseColorHex = baseRun.colorHex;
+
+  if (resolved.align) para.align = resolved.align as TextAlign;
+
+  applyIndents(para, resolved, ctx);
+  applySpacing(para, resolved);
+
+  if (resolved.contextualSpacing) para.contextualSpacing = true;
+  if (resolved.keepTogether) para.keepTogether = true;
+  if (resolved.pageBreakBefore) para.pageBreakBefore = true;
+  if (resolved.shadingHex) para.shadingHex = resolved.shadingHex;
+
+  const borders = mapBorders(resolved);
+  if (borders) para.paraBorders = borders;
+
+  // List marker (advances numbering counters, in document order).
+  if (resolved.numId !== undefined) {
+    para.level = resolved.ilvl ?? 0;
+    const marker = ctx.numbering.marker(resolved.numId, para.level);
+    if (marker) para.listMarker = marker;
+  }
+
+  const images = findImages(p, ctx);
+
+  // Image-only paragraph: drop the empty paragraph, keep the images.
+  if (runs.length === 0 && images.length > 0) return images;
+  return [para, ...images];
 }
 
-function buildParaBorders(
-  pBdr: Partial<Record<'top' | 'bottom' | 'left' | 'right', ParaBorderSide>>,
-): DocxParagraph['paraBorders'] {
-  const out: NonNullable<DocxParagraph['paraBorders']> = {};
-  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
-    const s = pBdr[side];
-    if (!s) continue;
-    const isDashed = s.type === 'dashed' || s.type === 'dotted';
-    const stroke: Stroke = {
-      color: { hex: s.colorHex },
-      width: s.widthPx,
-      ...(isDashed ? { dash: [4, 3] } : {}),
-    };
-    out[side] = stroke;
+function applyIndents(para: DocxParagraph, r: ParaProps, ctx: ParseContext): void {
+  let left = r.indentLeftTwip;
+  let firstLine = r.indentFirstLineTwip;
+  let hanging = r.hangingTwip;
+
+  // Fall back to the numbering level's indent when the paragraph doesn't set one.
+  if (r.numId !== undefined && (left === undefined || hanging === undefined)) {
+    const lvl = ctx.numbering.levelIndent(r.numId, r.ilvl ?? 0);
+    if (left === undefined && lvl.leftPx !== undefined) para.indentLeftPx = lvl.leftPx;
+    if (hanging === undefined && lvl.hangingPx !== undefined) para.indentFirstLinePx = -lvl.hangingPx;
   }
-  return Object.keys(out).length > 0 ? out : undefined;
+
+  if (left !== undefined) para.indentLeftPx = twipToPx(left);
+  if (r.indentRightTwip !== undefined) para.indentRightPx = twipToPx(r.indentRightTwip);
+  if (hanging !== undefined) para.indentFirstLinePx = -twipToPx(hanging);
+  else if (firstLine !== undefined) para.indentFirstLinePx = twipToPx(firstLine);
+}
+
+function applySpacing(para: DocxParagraph, r: ParaProps): void {
+  if (r.spaceBeforeTwip !== undefined) para.spaceBeforePt = twipToPt(r.spaceBeforeTwip);
+  if (r.spaceAfterTwip !== undefined) para.spaceAfterPt = twipToPt(r.spaceAfterTwip);
+  if (r.line !== undefined) {
+    if (r.lineRule === 'auto' || r.lineRule === undefined) para.lineSpacingPct = r.line / 240;
+    else para.lineSpacingPt = twipToPt(r.line);
+  }
+}
+
+function mapBorders(r: ParaProps): DocxParagraph['paraBorders'] {
+  if (!r.borders) return undefined;
+  const out: NonNullable<DocxParagraph['paraBorders']> = {};
+  let any = false;
+  for (const side of ['top', 'bottom', 'left', 'right'] as const) {
+    const stroke = borderToStroke(r.borders[side]);
+    if (stroke) {
+      out[side] = stroke;
+      any = true;
+    }
+  }
+  return any ? out : undefined;
+}
+
+export function borderToStroke(b: RawBorder | undefined): Stroke | undefined {
+  if (!b || b.val === 'none' || b.val === 'nil') return undefined;
+  return {
+    color: { hex: b.colorHex ?? '000000' },
+    width: borderSzToPx(b.sz ?? 4),
+  };
 }

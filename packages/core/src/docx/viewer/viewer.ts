@@ -1,512 +1,234 @@
 /**
- * DocxViewer controller: mounts a {@link DocxDocument} into a container,
- * measures every block off-screen for accurate pagination, then renders
- * all pages in a vertically scrollable stack with a right-side thumbnail strip.
+ * Viewer controller: mounts a {@link DocxDocument} into a container and renders
+ * its pages as a vertical, scrollable stack scaled to fit the container width —
+ * the embedded-document style (vs PPTX's one-slide-at-a-time fit).
+ *
+ * Navigation (next/prev/goTo) scrolls to a page; the current page index is
+ * reported via `onChange` as the user scrolls.
  */
 import type { DocxDocument } from '../document/document.js';
-import { renderPage, renderBlock } from '../render/dom.js';
+import { renderPage } from '../render/dom.js';
+import { paginate } from './paginate.js';
 import type { DocxPage } from '../model.js';
-import { DocxEditController, type EditContext } from './editing.js';
-import type { RunPropPatch } from '../edit/ops.js';
 
 export interface DocxViewerOptions {
   startIndex?: number;
-  /** Enable keyboard navigation (PageUp/Down, arrow keys). Default true. */
+  /** Enable PageUp/PageDown/Home/End navigation on the container. Default true. */
   keyboard?: boolean;
-  /** Enable inline WYSIWYG editing (contenteditable + formatting). Default false. */
-  editable?: boolean;
-  /** Called whenever the most-visible page changes. */
+  /**
+   * Initial zoom. A number is an explicit scale (1 = 100%); `'fit-width'`
+   * (default) fits the page to the container width, capped at 100% so wide
+   * panels don't upscale.
+   */
+  zoom?: number | 'fit-width';
+  /** Called when the current (top-most visible) page changes. */
   onChange?: (index: number, count: number) => void;
+  /** Called whenever the effective zoom scale changes (1 = 100%). */
+  onScaleChange?: (scale: number) => void;
 }
 
-const SIDEBAR_W = 112; // px — thumbnail strip width
-const ZOOM_STEP = 0.1;
-const ZOOM_MIN  = 0.25;
-const ZOOM_MAX  = 3.0;
+const PAGE_GAP = 16;
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 5;
 
 export class DocxViewer {
   private readonly doc: DocxDocument;
   private readonly container: HTMLElement;
-  private readonly scrollEl: HTMLDivElement;
-  private readonly sidebarEl: HTMLDivElement;
+  private readonly holder: HTMLDivElement;
+  private readonly pagesEl: HTMLDivElement;
   private readonly pageEls: HTMLElement[] = [];
-  private readonly thumbEls: HTMLElement[] = [];
-  private readonly zoomLabel: HTMLSpanElement;
+  private readonly pageModels: DocxPage[];
   private readonly onChange: DocxViewerOptions['onChange'];
+  private readonly onScaleChange: DocxViewerOptions['onScaleChange'];
+  /** 'fit-width' recomputes on resize; a number is a fixed user zoom. */
+  private zoomMode: number | 'fit-width';
   private index = 0;
-  private userZoom: number | null = 1;
+  private scale = 1;
   private resizeObserver: ResizeObserver | null = null;
-  private intersectionObserver: IntersectionObserver | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
-  private editable = false;
-  private editController: DocxEditController | null = null;
-  private changeUnsub: (() => void) | null = null;
+  private scrollHandler: (() => void) | null = null;
 
   constructor(doc: DocxDocument, container: HTMLElement, options: DocxViewerOptions = {}) {
     this.doc = doc;
     this.container = container;
+    this.zoomMode = options.zoom ?? 'fit-width';
     if (options.onChange) this.onChange = options.onChange;
+    if (options.onScaleChange) this.onScaleChange = options.onScaleChange;
 
-    container.style.position = 'relative';
+    container.style.overflow = 'auto';
+    container.style.background = '#525659';
 
-    // ── Outer flex shell ──────────────────────────────────────────────────
-    const shell = document.createElement('div');
-    shell.style.position = 'absolute';
-    shell.style.inset = '0';
-    shell.style.display = 'flex';
-    shell.style.overflow = 'hidden';
-    container.appendChild(shell);
+    this.holder = document.createElement('div');
+    this.holder.style.margin = '0 auto';
 
-    // ── Main column (toolbar + scroll) ────────────────────────────────────
-    const mainCol = document.createElement('div');
-    mainCol.style.flex = '1';
-    mainCol.style.minWidth = '0';
-    mainCol.style.display = 'flex';
-    mainCol.style.flexDirection = 'column';
-    mainCol.style.overflow = 'hidden';
-    shell.appendChild(mainCol);
+    this.pagesEl = document.createElement('div');
+    this.pagesEl.style.display = 'flex';
+    this.pagesEl.style.flexDirection = 'column';
+    this.pagesEl.style.alignItems = 'center';
+    this.pagesEl.style.gap = `${PAGE_GAP}px`;
+    this.pagesEl.style.transformOrigin = 'top left';
+    this.holder.appendChild(this.pagesEl);
+    container.appendChild(this.holder);
 
-    // ── Zoom toolbar ──────────────────────────────────────────────────────
-    const toolbar = document.createElement('div');
-    toolbar.style.display = 'flex';
-    toolbar.style.alignItems = 'center';
-    toolbar.style.justifyContent = 'center';
-    toolbar.style.gap = '4px';
-    toolbar.style.padding = '5px 12px';
-    toolbar.style.background = '#1e1e1e';
-    toolbar.style.borderBottom = '1px solid #333';
-    toolbar.style.flexShrink = '0';
-    toolbar.style.userSelect = 'none';
-    mainCol.appendChild(toolbar);
-
-    const btnStyle = (el: HTMLButtonElement) => {
-      el.style.background = '#2e2e2e';
-      el.style.border = '1px solid #444';
-      el.style.borderRadius = '4px';
-      el.style.color = '#ddd';
-      el.style.cursor = 'pointer';
-      el.style.fontSize = '14px';
-      el.style.lineHeight = '1';
-      el.style.padding = '3px 9px';
-      el.style.transition = 'background 0.1s';
-      el.addEventListener('mouseover', () => { el.style.background = '#3a3a3a'; });
-      el.addEventListener('mouseout',  () => { el.style.background = '#2e2e2e'; });
-    };
-
-    const zoomOutBtn = document.createElement('button');
-    zoomOutBtn.textContent = '−';
-    zoomOutBtn.title = 'Zoom out';
-    btnStyle(zoomOutBtn);
-    zoomOutBtn.addEventListener('click', () => this.zoomOut());
-
-    this.zoomLabel = document.createElement('span');
-    this.zoomLabel.style.color = '#bbb';
-    this.zoomLabel.style.fontSize = '12px';
-    this.zoomLabel.style.minWidth = '46px';
-    this.zoomLabel.style.textAlign = 'center';
-    this.zoomLabel.style.cursor = 'pointer';
-    this.zoomLabel.style.padding = '2px 4px';
-    this.zoomLabel.style.borderRadius = '3px';
-    this.zoomLabel.title = 'Reset to fit width';
-    this.zoomLabel.addEventListener('click', () => this.zoomFit());
-    this.zoomLabel.addEventListener('mouseover', () => { this.zoomLabel.style.background = '#2e2e2e'; });
-    this.zoomLabel.addEventListener('mouseout',  () => { this.zoomLabel.style.background = 'transparent'; });
-
-    const zoomInBtn = document.createElement('button');
-    zoomInBtn.textContent = '+';
-    zoomInBtn.title = 'Zoom in';
-    btnStyle(zoomInBtn);
-    zoomInBtn.addEventListener('click', () => this.zoomIn());
-
-    toolbar.appendChild(zoomOutBtn);
-    toolbar.appendChild(this.zoomLabel);
-    toolbar.appendChild(zoomInBtn);
-
-    // ── Main scroll area ──────────────────────────────────────────────────
-    this.scrollEl = document.createElement('div');
-    this.scrollEl.style.flex = '1';
-    this.scrollEl.style.minWidth = '0';
-    this.scrollEl.style.overflowY = 'auto';
-    this.scrollEl.style.overflowX = 'auto';
-    this.scrollEl.style.paddingTop = '28px';
-    this.scrollEl.style.paddingBottom = '28px';
-    mainCol.appendChild(this.scrollEl);
-
-    // ── Thumbnail sidebar ─────────────────────────────────────────────────
-    this.sidebarEl = document.createElement('div');
-    this.sidebarEl.style.width = `${SIDEBAR_W}px`;
-    this.sidebarEl.style.flexShrink = '0';
-    this.sidebarEl.style.overflowY = 'auto';
-    this.sidebarEl.style.overflowX = 'hidden';
-    this.sidebarEl.style.background = '#2e2e2e';
-    this.sidebarEl.style.borderLeft = '1px solid #444';
-    this.sidebarEl.style.paddingTop = '12px';
-    this.sidebarEl.style.paddingBottom = '12px';
-    this.sidebarEl.style.display = 'flex';
-    this.sidebarEl.style.flexDirection = 'column';
-    this.sidebarEl.style.alignItems = 'center';
-    this.sidebarEl.style.gap = '8px';
-    shell.appendChild(this.sidebarEl);
-
-    // ── DOM-measured pagination then render ───────────────────────────────
-    this.editable = options.editable === true;
-    // Controller is created up front; it is only *attached* while editable, so
-    // editing can be toggled on/off later without recreating the viewer or
-    // reloading the document (edits persist across mode switches).
-    this.editController = new DocxEditController(doc);
-
-    this.renderAll();
-
-    this.resizeObserver = new ResizeObserver(() => {
-      if (this.userZoom === null) this.applyZoom();
-    });
-    this.resizeObserver.observe(container);
+    const deps = { imageUrl: (p: string) => this.doc.imageUrl(p) };
+    // Flow sections into fixed-size pages (needs the DOM for measurement).
+    this.pageModels = paginate(this.doc.sections, deps);
+    for (const page of this.pageModels) {
+      const el = renderPage(page, deps);
+      this.pageEls.push(el);
+      this.pagesEl.appendChild(el);
+    }
 
     if (options.keyboard !== false) this.enableKeyboard();
+    this.scrollHandler = () => this.updateCurrentFromScroll();
+    container.addEventListener('scroll', this.scrollHandler, { passive: true });
+    this.resizeObserver = new ResizeObserver(() => this.applyScale());
+    this.resizeObserver.observe(container);
 
-    const start = options.startIndex ?? 0;
-    if (start > 0) requestAnimationFrame(() => this.goTo(start));
-
-    this.onChange?.(0, this.count);
-
-    // Re-render whenever the document is edited (in any mode).
-    this.changeUnsub = doc.onChange(() => this.rerender());
+    this.applyScale();
+    if (options.startIndex) this.goTo(options.startIndex);
+    else this.onChange?.(0, this.count);
   }
 
-  /** Whether inline editing is currently active. */
-  get isEditable(): boolean {
-    return this.editable;
+  get count(): number {
+    return this.pages.length;
   }
-
-  /** Toggle inline editing without recreating the viewer or reloading the doc. */
-  setEditable(on: boolean): void {
-    if (this.editable === on) return;
-    this.editable = on;
-    if (!on) this.editController?.detach();
-    this.rerender(); // renderAll re-attaches the controller iff editable
+  get currentIndex(): number {
+    return this.index;
   }
-
-  /** (Re)build the page + thumbnail DOM from current content; re-attaches editing. */
-  private renderAll(): void {
-    this.intersectionObserver?.disconnect();
-    this.scrollEl.replaceChildren();
-    this.sidebarEl.replaceChildren();
-    this.pageEls.length = 0;
-    this.thumbEls.length = 0;
-
-    const pages = this.measureAndPaginate();
-    this.renderPages(pages);
-    this.applyZoom();
-    this.index = Math.min(this.index, Math.max(0, this.pageEls.length - 1));
-    this.updateActiveThumb(this.index);
-    this.setupIntersection();
-    if (this.editable) this.editController?.attach(this.scrollEl);
+  private get pages(): DocxPage[] {
+    return this.pageModels;
   }
-
-  /** Re-render after an edit, preserving scroll position. */
-  private rerender(): void {
-    const scrollTop = this.scrollEl.scrollTop;
-    this.renderAll();
-    this.scrollEl.scrollTop = scrollTop;
-  }
-
-  // ── DOM measurement → repagination ────────────────────────────────────────
-
-  /**
-   * Render every block into a hidden off-screen container, measure its actual
-   * rendered height, then call doc.repaginate() with those real heights.
-   * Falls back to the heuristic pages (doc.pages) if the DOM is unavailable.
-   */
-  private measureAndPaginate(): DocxPage[] {
-    if (typeof document === 'undefined') return this.doc.pages;
-
-    const deps = { imageUrl: (p: string) => this.doc.imageUrl(p) };
-
-    // Scratch container: off-screen but still participates in layout so
-    // getBoundingClientRect returns real dimensions.
-    const scratch = document.createElement('div');
-    scratch.style.cssText = [
-      'position:fixed',
-      'top:-99999px',
-      'left:0',
-      'visibility:hidden',
-      'pointer-events:none',
-      'box-sizing:border-box',
-    ].join(';');
-    document.body.appendChild(scratch);
-
-    // Use the first page's geometry for the scratch width.
-    // For multi-section documents the width rarely changes, and even if it
-    // does the difference is small — this is vastly more accurate than the
-    // heuristic formula.
-    const firstPage = this.doc.pages[0];
-    if (!firstPage) {
-      document.body.removeChild(scratch);
-      return this.doc.pages;
-    }
-
-    let pages: DocxPage[];
-    try {
-      pages = this.doc.repaginate((block, contentWidthPx) => {
-        // Images carry explicit dimensions — trust them directly.
-        if (block.kind === 'image') return block.heightPx + 4;
-
-        const el = renderBlock(block, deps);
-        if (!el) return 10;
-
-        scratch.style.width = `${contentWidthPx}px`;
-        scratch.appendChild(el);
-
-        if (block.kind === 'table') {
-          // Return per-row heights so the paginator can split the table across pages.
-          const trEls = el.querySelectorAll('tr');
-          const rowHeights: number[] = [];
-          for (const tr of trEls) {
-            rowHeights.push(Math.max(0, tr.getBoundingClientRect().height));
-          }
-          scratch.removeChild(el);
-          return rowHeights.length > 0 ? rowHeights : [el.getBoundingClientRect().height];
-        }
-
-        const h = el.getBoundingClientRect().height;
-        scratch.removeChild(el);
-        // Add a small margin buffer (paragraph spacing, etc.) to avoid tight cuts.
-        return Math.max(4, h);
-      });
-    } finally {
-      document.body.removeChild(scratch);
-    }
-    return pages;
-  }
-
-  // ── Page + thumbnail rendering ────────────────────────────────────────────
-
-  private renderPages(pages: DocxPage[]): void {
-    const deps = { imageUrl: (p: string) => this.doc.imageUrl(p) };
-    const thumbW = SIDEBAR_W - 20;
-
-    for (let i = 0; i < pages.length; i++) {
-      const page = pages[i]!;
-      const pageEl = renderPage(page, deps);
-      pageEl.dataset.pageIndex = String(i);
-
-      const wrapper = document.createElement('div');
-      wrapper.style.display = 'flex';
-      wrapper.style.justifyContent = 'center';
-      wrapper.style.marginBottom = '28px';
-      wrapper.appendChild(pageEl);
-      this.scrollEl.appendChild(wrapper);
-      this.pageEls.push(pageEl);
-
-      // Thumbnail
-      const thumbScale = thumbW / page.size.wPx;
-      const thumbH = Math.round(page.size.hPx * thumbScale);
-
-      const thumb = document.createElement('div');
-      thumb.style.width = `${thumbW}px`;
-      thumb.style.height = `${thumbH}px`;
-      thumb.style.flexShrink = '0';
-      thumb.style.border = '2px solid transparent';
-      thumb.style.borderRadius = '2px';
-      thumb.style.cursor = 'pointer';
-      thumb.style.position = 'relative';
-      thumb.style.overflow = 'hidden';
-      thumb.style.transition = 'border-color 0.15s';
-      thumb.title = `Page ${i + 1}`;
-
-      const thumbPageEl = renderPage(page, deps);
-      thumbPageEl.style.boxShadow = 'none';
-      thumbPageEl.style.transformOrigin = 'top left';
-      thumbPageEl.style.transform = `scale(${thumbScale})`;
-      thumbPageEl.style.pointerEvents = 'none';
-      thumb.appendChild(thumbPageEl);
-
-      const label = document.createElement('div');
-      label.textContent = String(i + 1);
-      label.style.position = 'absolute';
-      label.style.bottom = '0';
-      label.style.left = '0';
-      label.style.right = '0';
-      label.style.textAlign = 'center';
-      label.style.fontSize = '9px';
-      label.style.color = '#555';
-      label.style.background = 'rgba(255,255,255,0.8)';
-      label.style.lineHeight = '14px';
-      label.style.pointerEvents = 'none';
-      thumb.appendChild(label);
-
-      thumb.addEventListener('click', () => this.goTo(i));
-      this.sidebarEl.appendChild(thumb);
-      this.thumbEls.push(thumb);
-    }
-  }
-
-  // ── Public navigation / zoom API ──────────────────────────────────────────
-
-  get count(): number { return this.pageEls.length; }
-  get currentIndex(): number { return this.index; }
 
   goTo(index: number): void {
-    const clamped = Math.max(0, Math.min(this.pageEls.length - 1, index));
-    const wrapper = this.pageEls[clamped]?.parentElement;
-    if (wrapper) wrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    const clamped = Math.max(0, Math.min(this.count - 1, index));
+    this.index = clamped;
+    const el = this.pageEls[clamped];
+    if (el) this.container.scrollTop = el.offsetTop * this.scale;
+    this.onChange?.(this.index, this.count);
   }
 
-  next(): void { this.goTo(this.index + 1); }
-  prev(): void { this.goTo(this.index - 1); }
+  next(): void {
+    this.goTo(this.index + 1);
+  }
+  prev(): void {
+    this.goTo(this.index - 1);
+  }
 
+  /** Current effective zoom scale (1 = 100%). */
+  get currentScale(): number {
+    return this.scale;
+  }
+
+  /** Set an explicit zoom (1 = 100%); switches out of fit-width mode. */
+  setZoom(scale: number): void {
+    this.zoomMode = clamp(scale, MIN_ZOOM, MAX_ZOOM);
+    this.applyScale();
+  }
   zoomIn(): void {
-    const next = Math.min(ZOOM_MAX, Math.round((this.currentZoomValue() + ZOOM_STEP) * 100) / 100);
-    this.setZoom(next);
+    this.setZoom(this.scale * 1.25);
   }
-
   zoomOut(): void {
-    const next = Math.max(ZOOM_MIN, Math.round((this.currentZoomValue() - ZOOM_STEP) * 100) / 100);
-    this.setZoom(next);
+    this.setZoom(this.scale / 1.25);
+  }
+  /** Re-fit each page to the container width (capped at 100%). */
+  fitWidth(): void {
+    this.zoomMode = 'fit-width';
+    this.applyScale();
   }
 
-  setZoom(level: number): void {
-    this.userZoom = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, level));
-    this.applyZoom();
+  /** Scale the page stack and size the holder box so scrollbars/centering match. */
+  private applyScale(): void {
+    const maxPageW = this.pages.reduce((m, p) => Math.max(m, p.size.wPx), 1);
+    // clientWidth already excludes the vertical scrollbar, so filling it exactly
+    // leaves no horizontal scrollbar and no side gutter around the page.
+    const avail = this.container.clientWidth || maxPageW;
+
+    // Fit-width shrinks a wide page to the container but never upscales past
+    // 100% — otherwise a wide panel opens the document zoomed in.
+    const next =
+      this.zoomMode === 'fit-width' ? Math.min(avail / maxPageW, 1) : this.zoomMode;
+    this.scale = clamp(next, MIN_ZOOM, MAX_ZOOM);
+    // Pin the (unscaled) stack width to the widest page so the top-left scale
+    // fills the holder exactly — otherwise the stack fills the holder's already
+    // scaled width and centering offsets get amplified by the transform.
+    this.pagesEl.style.width = `${maxPageW}px`;
+    this.pagesEl.style.transform = this.scale === 1 ? '' : `scale(${this.scale})`;
+
+    // Transform doesn't change the layout box; size the holder to the scaled
+    // dimensions so the scrollbars and `margin:auto` centering are correct.
+    const naturalH = this.pagesEl.offsetHeight;
+    this.holder.style.width = `${maxPageW * this.scale}px`;
+    this.holder.style.height = `${naturalH * this.scale}px`;
+    this.onScaleChange?.(this.scale);
   }
 
-  zoomFit(): void {
-    this.userZoom = null;
-    this.applyZoom();
-  }
-
-  // ── Editing API (active only when constructed with editable: true) ─────────
-
-  get canUndo(): boolean { return this.doc.canUndo; }
-  get canRedo(): boolean { return this.doc.canRedo; }
-  get isEdited(): boolean { return this.doc.isEdited; }
-  undo(): void { this.doc.undo(); }
-  redo(): void { this.doc.redo(); }
-
-  /** Apply run formatting to the current selection (or focused run). */
-  format(props: RunPropPatch): void { this.editController?.format(props); }
-
-  /** Toggle a boolean run prop (bold/italic/underline/strike) on the selection. */
-  toggleFormat(prop: 'bold' | 'italic' | 'underline' | 'strike'): void {
-    this.editController?.toggleProp(prop);
-  }
-
-  /** The run/paragraph/cell the user last interacted with (for structural actions). */
-  editContext(): EditContext { return this.editController?.context ?? {}; }
-
-  insertParagraph(): void {
-    const id = this.editController?.context.paragraphId;
-    if (id) this.doc.insertParagraphAfter(id);
-  }
-  deleteParagraph(): void {
-    const id = this.editController?.context.paragraphId;
-    if (id) this.doc.deleteNode(id);
-  }
-  insertTableRow(): void {
-    const id = this.editController?.context.cellId;
-    if (id) this.doc.insertRowAfter(id);
-  }
-  deleteTableRow(): void {
-    const id = this.editController?.context.cellId;
-    if (id) this.doc.deleteRow(id);
-  }
-
-  /** Export the (edited) document as .docx bytes. */
-  exportDocx(): Uint8Array { return this.doc.export(); }
-  /** Export the (edited) document as a .docx Blob (for download). */
-  exportBlob(): Blob { return this.doc.exportBlob(); }
-
-  // ── Internal helpers ──────────────────────────────────────────────────────
-
-  private currentZoomValue(): number {
-    if (this.userZoom !== null) return this.userZoom;
-    const cw = this.container.clientWidth - SIDEBAR_W;
-    const pageEl = this.pageEls[0];
-    // Read the natural page width from the element's inline style.
-    const pageW = pageEl ? parseFloat(pageEl.style.width) || 794 : 794;
-    return cw > 0 ? (cw - 48) / pageW : 1;
-  }
-
-  private applyZoom(): void {
-    const cw = this.container.clientWidth - SIDEBAR_W;
-    if (cw <= 0) return;
-
+  private updateCurrentFromScroll(): void {
+    const y = this.container.scrollTop / (this.scale || 1);
+    let idx = 0;
     for (let i = 0; i < this.pageEls.length; i++) {
-      const pageEl = this.pageEls[i]!;
-      const pageW = parseFloat(pageEl.style.width) || 794;
-      const zoom = this.userZoom !== null ? this.userZoom : (cw - 48) / pageW;
-      (pageEl.style as CSSStyleDeclaration & { zoom: string }).zoom = String(zoom);
+      if (this.pageEls[i]!.offsetTop <= y + 4) idx = i;
+      else break;
     }
-
-    const displayZoom = this.currentZoomValue();
-    this.zoomLabel.textContent = `${Math.round(displayZoom * 100)}%`;
-  }
-
-  private updateActiveThumb(idx: number): void {
-    for (let i = 0; i < this.thumbEls.length; i++) {
-      const th = this.thumbEls[i]!;
-      th.style.borderColor = i === idx ? '#4a9eff' : 'transparent';
-      th.style.boxShadow   = i === idx ? '0 0 0 1px #4a9eff' : 'none';
+    if (idx !== this.index) {
+      this.index = idx;
+      this.onChange?.(this.index, this.count);
     }
-    this.thumbEls[idx]?.scrollIntoView({ block: 'nearest' });
-  }
-
-  private setupIntersection(): void {
-    if (typeof IntersectionObserver === 'undefined') return;
-    this.intersectionObserver?.disconnect();
-    const ratios = new Map<number, number>();
-    this.intersectionObserver = new IntersectionObserver(
-      (entries) => {
-        for (const entry of entries) {
-          const el = entry.target as HTMLElement;
-          const idx = Number(el.dataset.pageIndex ?? '-1');
-          if (idx >= 0) ratios.set(idx, entry.intersectionRatio);
-        }
-        let best = this.index, bestRatio = -1;
-        for (const [idx, ratio] of ratios) {
-          if (ratio > bestRatio) { bestRatio = ratio; best = idx; }
-        }
-        if (best !== this.index) {
-          this.index = best;
-          this.updateActiveThumb(this.index);
-          this.onChange?.(this.index, this.count);
-        }
-      },
-      { root: this.scrollEl, threshold: [0, 0.1, 0.25, 0.5, 0.75, 1] },
-    );
-    for (const el of this.pageEls) this.intersectionObserver.observe(el);
   }
 
   private enableKeyboard(): void {
     if (this.container.tabIndex < 0) this.container.tabIndex = 0;
     this.keyHandler = (e: KeyboardEvent) => {
-      // Never hijack keys (space, arrows, -, +, 0, …) while the user is typing
-      // in an editable region — that text input must reach the contenteditable.
-      const t = e.target as HTMLElement | null;
-      if (t && (t.isContentEditable || t.closest?.('[contenteditable="true"]'))) return;
+      if (e.ctrlKey || e.metaKey) {
+        if (e.key === '=' || e.key === '+') {
+          e.preventDefault();
+          this.zoomIn();
+          return;
+        }
+        if (e.key === '-') {
+          e.preventDefault();
+          this.zoomOut();
+          return;
+        }
+        if (e.key === '0') {
+          e.preventDefault();
+          this.fitWidth();
+          return;
+        }
+      }
       switch (e.key) {
-        case 'ArrowDown': case 'PageDown': case ' ':
-          e.preventDefault(); this.next(); break;
-        case 'ArrowUp': case 'PageUp':
-          e.preventDefault(); this.prev(); break;
-        case 'Home': e.preventDefault(); this.goTo(0); break;
-        case 'End':  e.preventDefault(); this.goTo(this.count - 1); break;
-        case '+': case '=': e.preventDefault(); this.zoomIn(); break;
-        case '-': e.preventDefault(); this.zoomOut(); break;
-        case '0': e.preventDefault(); this.zoomFit(); break;
+        case 'PageDown':
+          e.preventDefault();
+          this.next();
+          break;
+        case 'PageUp':
+          e.preventDefault();
+          this.prev();
+          break;
+        case 'Home':
+          e.preventDefault();
+          this.goTo(0);
+          break;
+        case 'End':
+          e.preventDefault();
+          this.goTo(this.count - 1);
+          break;
       }
     };
     this.container.addEventListener('keydown', this.keyHandler);
   }
 
   destroy(): void {
-    this.changeUnsub?.();
-    this.editController?.detach();
     this.resizeObserver?.disconnect();
-    this.intersectionObserver?.disconnect();
     if (this.keyHandler) this.container.removeEventListener('keydown', this.keyHandler);
-    this.container.querySelector('div')?.remove();
+    if (this.scrollHandler) this.container.removeEventListener('scroll', this.scrollHandler);
+    this.pagesEl.remove();
+    this.holder.remove();
   }
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
 }
 
 export function createDocxViewer(

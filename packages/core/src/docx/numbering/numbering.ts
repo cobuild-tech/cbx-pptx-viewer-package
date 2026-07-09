@@ -1,169 +1,166 @@
 /**
- * List numbering resolution for WordprocessingML.
+ * List numbering (numbering.xml).
  *
- * word/numbering.xml defines abstract numbering definitions (abstractNum) that
- * describe per-level formats, and concrete numbering instances (num) that point
- * to an abstract definition with optional per-level overrides.
- *
- * Paragraphs reference a numId + ilvl to get their bullet/number formatting.
+ * Resolves a paragraph's (numId, ilvl) to a rendered list marker ("•", "1.",
+ * "a)", "II.", …). Ordered lists need running counters, so {@link Numbering} is
+ * stateful: the body walker calls {@link Numbering.marker} in document order and
+ * counters advance/reset exactly as Word tracks them.
  */
 import { child, children, attr, attrNum, type XmlNode } from '../../oxml/xml.js';
-import { twipsToPx, halfPtToPt } from '../units.js';
-import type { Bullet } from '../model.js';
 
-export interface ListLevel {
-  numFmt: string;           // 'bullet', 'decimal', 'lowerLetter', 'upperLetter', 'lowerRoman', 'upperRoman', 'none', ...
-  lvlText: string;          // bullet char (e.g. '•') or number format (e.g. '%1.')
-  startAt: number;
-  indentLeftPx: number;
-  indentFirstLinePx: number;
-  fontAscii?: string;
+interface LvlDef {
+  numFmt: string;
+  lvlText: string;
+  start: number;
+  /** Left indent (twips) from the level's pPr, if any. */
+  indentLeftTwip?: number;
+  hangingTwip?: number;
+  bulletFont?: string;
 }
 
-export class NumberingMap {
-  /** abstractNumId -> per-level definitions */
-  private abstracts = new Map<number, ListLevel[]>();
-  /** numId -> abstractNumId + level overrides */
-  private nums = new Map<number, { abstractId: number; overrides: Map<number, Partial<ListLevel>> }>();
+export class Numbering {
+  /** abstractNumId -> ilvl -> level definition */
+  private readonly abstract = new Map<number, Map<number, LvlDef>>();
+  /** numId -> abstractNumId */
+  private readonly numToAbstract = new Map<number, number>();
+  /** live counters: numId -> ilvl -> current value */
+  private readonly counters = new Map<number, Map<number, number>>();
 
-  static parse(xml: XmlNode | undefined): NumberingMap {
-    const map = new NumberingMap();
-    if (!xml) return map;
+  private constructor(
+    abstract: Map<number, Map<number, LvlDef>>,
+    numToAbstract: Map<number, number>,
+  ) {
+    this.abstract = abstract;
+    this.numToAbstract = numToAbstract;
+  }
 
-    for (const absEl of children(xml, 'abstractNum')) {
-      const id = attrNum(absEl, 'w:abstractNumId') ?? attrNum(absEl, 'abstractNumId');
+  static parse(numberingXml: XmlNode | undefined): Numbering {
+    const abstract = new Map<number, Map<number, LvlDef>>();
+    const numToAbstract = new Map<number, number>();
+    if (!numberingXml) return new Numbering(abstract, numToAbstract);
+
+    for (const an of children(numberingXml, 'abstractNum')) {
+      const id = attrNum(an, 'abstractNumId');
       if (id === undefined) continue;
-      const levels: ListLevel[] = [];
-      for (const lvlEl of children(absEl, 'lvl')) {
-        levels.push(parseLvl(lvlEl));
+      const levels = new Map<number, LvlDef>();
+      for (const lvl of children(an, 'lvl')) {
+        const ilvl = attrNum(lvl, 'ilvl') ?? 0;
+        const ind = child(child(lvl, 'pPr'), 'ind');
+        levels.set(ilvl, {
+          numFmt: attr(child(lvl, 'numFmt'), 'val') ?? 'decimal',
+          lvlText: attr(child(lvl, 'lvlText'), 'val') ?? '',
+          start: attrNum(child(lvl, 'start'), 'val') ?? 1,
+          indentLeftTwip: attrNum(ind, 'left') ?? attrNum(ind, 'start'),
+          hangingTwip: attrNum(ind, 'hanging'),
+          bulletFont: attr(child(child(lvl, 'rPr'), 'rFonts'), 'ascii'),
+        });
       }
-      map.abstracts.set(id, levels);
+      abstract.set(id, levels);
     }
 
-    for (const numEl of children(xml, 'num')) {
-      const numId = attrNum(numEl, 'w:numId') ?? attrNum(numEl, 'numId');
-      if (numId === undefined) continue;
-      const abstractId =
-        attrNum(child(numEl, 'abstractNumId'), 'w:val') ??
-        attrNum(child(numEl, 'abstractNumId'), 'val') ??
-        0;
-      const overrides = new Map<number, Partial<ListLevel>>();
-      for (const lvlOvr of children(numEl, 'lvlOverride')) {
-        const ilvl = attrNum(lvlOvr, 'w:ilvl') ?? attrNum(lvlOvr, 'ilvl') ?? 0;
-        const ovr: Partial<ListLevel> = {};
-        const startOvr = child(lvlOvr, 'startOverride');
-        if (startOvr) {
-          ovr.startAt = attrNum(startOvr, 'w:val') ?? attrNum(startOvr, 'val') ?? 1;
-        }
-        overrides.set(ilvl, ovr);
-      }
-      map.nums.set(numId, { abstractId, overrides });
+    for (const num of children(numberingXml, 'num')) {
+      const numId = attrNum(num, 'numId');
+      const absId = attrNum(child(num, 'abstractNumId'), 'val');
+      if (numId !== undefined && absId !== undefined) numToAbstract.set(numId, absId);
     }
-    return map;
+    return new Numbering(abstract, numToAbstract);
   }
 
-  resolve(numId: number, ilvl: number): ListLevel | undefined {
-    const num = this.nums.get(numId);
-    if (!num) return undefined;
-    const levels = this.abstracts.get(num.abstractId);
-    const base = levels?.[ilvl];
-    if (!base) return undefined;
-    const ovr = num.overrides.get(ilvl);
-    return ovr ? { ...base, ...ovr } : base;
+  private lvlDef(numId: number, ilvl: number): LvlDef | undefined {
+    const absId = this.numToAbstract.get(numId);
+    if (absId === undefined) return undefined;
+    return this.abstract.get(absId)?.get(ilvl);
   }
 
-  /** Convert a resolved ListLevel to a Bullet IR node. */
-  toBullet(level: ListLevel, counters: Map<string, number>, numId: number, ilvl: number): Bullet {
-    if (level.numFmt === 'none') return { type: 'none' };
+  /** Indent hint (px) from the numbering level, for lists lacking paragraph ind. */
+  levelIndent(numId: number, ilvl: number): { leftPx?: number; hangingPx?: number } {
+    const def = this.lvlDef(numId, ilvl);
+    return {
+      leftPx: def?.indentLeftTwip !== undefined ? def.indentLeftTwip / 15 : undefined,
+      hangingPx: def?.hangingTwip !== undefined ? def.hangingTwip / 15 : undefined,
+    };
+  }
 
-    if (level.numFmt === 'bullet') {
-      return {
-        type: 'char',
-        char: level.lvlText || '•',
-        font: level.fontAscii,
-      };
+  /**
+   * Advance counters for (numId, ilvl) and return the rendered marker text.
+   * Call once per list paragraph, in document order.
+   */
+  marker(numId: number, ilvl: number): string {
+    const def = this.lvlDef(numId, ilvl);
+    if (!def) return '';
+
+    if (def.numFmt === 'bullet') return bulletChar(def.lvlText, def.bulletFont);
+
+    // Ordered: advance this level, reset deeper levels.
+    let counter = this.counters.get(numId);
+    if (!counter) {
+      counter = new Map();
+      this.counters.set(numId, counter);
     }
+    const cur = counter.has(ilvl) ? counter.get(ilvl)! + 1 : def.start;
+    counter.set(ilvl, cur);
+    for (const [lvl] of counter) if (lvl > ilvl) counter.delete(lvl);
 
-    // Numbered: increment counter for this numId+ilvl.
-    const key = `${numId}:${ilvl}`;
-    const current = counters.get(key) ?? (level.startAt - 1);
-    const next = current + 1;
-    counters.set(key, next);
-
-    // Reset deeper levels.
-    for (let i = ilvl + 1; i < 9; i++) {
-      counters.delete(`${numId}:${i}`);
-    }
-
-    // Format the lvlText pattern ('%1.' etc.) with computed number values.
-    const displayText = level.lvlText.replace(/%(\d+)/g, (_, n: string) => {
-      const targetIlvl = parseInt(n, 10) - 1;
-      if (targetIlvl === ilvl) return formatNumber(next, level.numFmt);
-      const pKey = `${numId}:${targetIlvl}`;
-      return formatNumber(counters.get(pKey) ?? 1, 'decimal');
+    // Substitute %1..%9 in lvlText with each level's formatted counter.
+    return def.lvlText.replace(/%(\d)/g, (_m, d: string) => {
+      const targetLvl = Number(d) - 1;
+      const val = targetLvl === ilvl ? cur : counter!.get(targetLvl) ?? this.lvlDef(numId, targetLvl)?.start ?? 1;
+      const fmt = this.lvlDef(numId, targetLvl)?.numFmt ?? 'decimal';
+      return formatNumber(val, fmt);
     });
-
-    return { type: 'char', char: displayText };
   }
 }
 
-function formatNumber(n: number, numFmt: string): string {
-  switch (numFmt) {
-    case 'decimal': return String(n);
-    case 'lowerLetter': return nToLetter(n).toLowerCase();
-    case 'upperLetter': return nToLetter(n).toUpperCase();
-    case 'lowerRoman': return toRoman(n).toLowerCase();
-    case 'upperRoman': return toRoman(n);
-    default: return String(n);
+function bulletChar(lvlText: string, font?: string): string {
+  // Symbol/Wingdings bullets map to common glyphs; otherwise pass through.
+  const code = lvlText.codePointAt(0);
+  if (font === 'Symbol' && code === 0xf0b7) return '•';
+  if (font === 'Wingdings' && code === 0xf0a7) return '▪';
+  if (font === 'Wingdings' && code === 0xf06e) return '■';
+  if (font === 'Courier New' && lvlText === 'o') return '◦';
+  return lvlText || '•';
+}
+
+function formatNumber(n: number, fmt: string): string {
+  switch (fmt) {
+    case 'lowerLetter':
+      return toLetter(n).toLowerCase();
+    case 'upperLetter':
+      return toLetter(n).toUpperCase();
+    case 'lowerRoman':
+      return toRoman(n).toLowerCase();
+    case 'upperRoman':
+      return toRoman(n).toUpperCase();
+    case 'decimalZero':
+      return n < 10 ? `0${n}` : String(n);
+    default:
+      return String(n);
   }
 }
 
-function nToLetter(n: number): string {
-  let result = '';
-  let num = n;
-  while (num > 0) {
-    result = String.fromCharCode(64 + ((num - 1) % 26 + 1)) + result;
-    num = Math.floor((num - 1) / 26);
+function toLetter(n: number): string {
+  let s = '';
+  let x = n;
+  while (x > 0) {
+    const rem = (x - 1) % 26;
+    s = String.fromCharCode(65 + rem) + s;
+    x = Math.floor((x - 1) / 26);
   }
-  return result || 'a';
+  return s || 'A';
 }
 
 function toRoman(n: number): string {
-  if (n <= 0) return String(n);
-  const vals = [1000, 900, 500, 400, 100, 90, 50, 40, 10, 9, 5, 4, 1];
-  const syms = ['M','CM','D','CD','C','XC','L','XL','X','IX','V','IV','I'];
-  let result = '';
-  for (let i = 0; i < vals.length; i++) {
-    while (n >= vals[i]!) { result += syms[i]; n -= vals[i]!; }
+  const table: [number, string][] = [
+    [1000, 'M'], [900, 'CM'], [500, 'D'], [400, 'CD'], [100, 'C'], [90, 'XC'],
+    [50, 'L'], [40, 'XL'], [10, 'X'], [9, 'IX'], [5, 'V'], [4, 'IV'], [1, 'I'],
+  ];
+  let x = n;
+  let out = '';
+  for (const [v, sym] of table) {
+    while (x >= v) {
+      out += sym;
+      x -= v;
+    }
   }
-  return result;
-}
-
-function parseLvl(lvlEl: XmlNode): ListLevel {
-  const numFmt =
-    attr(child(lvlEl, 'numFmt'), 'w:val') ?? attr(child(lvlEl, 'numFmt'), 'val') ?? 'bullet';
-  const lvlTextEl = child(lvlEl, 'lvlText');
-  const lvlText =
-    attr(lvlTextEl, 'w:val') ?? attr(lvlTextEl, 'val') ?? '•';
-  const startAt =
-    attrNum(child(lvlEl, 'start'), 'w:val') ?? attrNum(child(lvlEl, 'start'), 'val') ?? 1;
-
-  const pPr = child(lvlEl, 'pPr');
-  const indEl = child(pPr, 'ind');
-  const left = attrNum(indEl, 'w:left') ?? attrNum(indEl, 'left') ?? 720;
-  const hanging = attrNum(indEl, 'w:hanging') ?? attrNum(indEl, 'hanging');
-  const firstLine = attrNum(indEl, 'w:firstLine') ?? attrNum(indEl, 'firstLine');
-
-  const rPr = child(lvlEl, 'rPr');
-  const fontsEl = child(rPr, 'rFonts');
-  const fontAscii = attr(fontsEl, 'w:ascii') ?? attr(fontsEl, 'ascii') ?? attr(fontsEl, 'w:hAnsi') ?? attr(fontsEl, 'hAnsi');
-
-  return {
-    numFmt,
-    lvlText,
-    startAt,
-    indentLeftPx: twipsToPx(left),
-    indentFirstLinePx: hanging !== undefined ? -twipsToPx(hanging) : firstLine !== undefined ? twipsToPx(firstLine) : 0,
-    fontAscii: fontAscii ?? undefined,
-  };
+  return out || 'I';
 }

@@ -1,13 +1,9 @@
 /**
- * DOM renderer for DOCX documents.
- *
- * Converts DocxPage IR nodes into HTML elements. The page is a white card
- * sized to the section's paper dimensions (width fixed; height auto so all
- * content is visible). The DocxViewer scales it to fit the container by width.
- *
- * Rendering mirrors the PPTX approach — feature renderers are isolated per
- * block type and share the RenderDeps interface for media resolution.
+ * DOM renderer: DocxPage model -> HTML/CSS. Consumes only the model (never
+ * XML). Each page is a fixed-width sheet with margin padding; the viewer scales
+ * pages to fit the container width and stacks them vertically.
  */
+import { ptToPx } from '../../oxml/units.js';
 import type {
   DocxPage,
   DocxBlock,
@@ -15,365 +11,402 @@ import type {
   DocxTable,
   DocxTableCell,
   DocxInlineImage,
+  DocxFloat,
   DocxRun,
-  Fill,
   Stroke,
-  Bullet,
+  TextAlign,
 } from '../model.js';
-import type { RenderDeps } from '../../pptx/render/primitives.js';
-import { colorToCss } from '../../pptx/color.js';
 
-export type { RenderDeps } from '../../pptx/render/primitives.js';
+export interface RenderDeps {
+  /** Resolve an embedded media part path to a displayable URL. */
+  imageUrl(part: string): string | undefined;
+}
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+const px = (n: number) => `${n}px`;
+
+const ALIGN: Record<TextAlign, string> = { l: 'left', ctr: 'center', r: 'right', just: 'justify' };
+
+/** Base typographic context shared by the sheet and the paginator's measurer. */
+export const SHEET_FONT = {
+  fontFamily: 'Calibri, "Segoe UI", Arial, sans-serif',
+  fontSize: '16px',
+  lineHeight: '1.15',
+} as const;
 
 /**
- * Render a single DocxPage into an HTML div.
- * Width is fixed to the page's paper width; height is auto (content-driven).
+ * Render one paginated page as a fixed-size sheet: content flows in the padding
+ * box between the margins, with the header drawn in the top margin band and the
+ * footer in the bottom margin band (matching Word).
  */
 export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
-  const root = document.createElement('div');
-  root.className = 'docx-page';
-  root.style.position = 'relative';
-  root.style.width = `${page.size.wPx}px`;
-  root.style.minHeight = `${page.size.hPx}px`;
-  root.style.background = 'white';
-  root.style.color = '#000000';
-  root.style.boxSizing = 'border-box';
-  root.style.boxShadow = '0 2px 12px rgba(0,0,0,0.18)';
-  root.style.overflowX = 'hidden';
+  const sheet = document.createElement('div');
+  const s = sheet.style;
+  s.position = 'relative';
+  s.boxSizing = 'border-box';
+  s.width = px(page.size.wPx);
+  s.height = px(page.size.hPx);
+  s.paddingTop = px(page.margins.topPx);
+  s.paddingRight = px(page.margins.rightPx);
+  s.paddingBottom = px(page.margins.bottomPx);
+  s.paddingLeft = px(page.margins.leftPx);
+  s.background = '#fff';
+  s.color = '#000';
+  s.margin = '0 auto';
+  s.boxShadow = '0 1px 6px rgba(0,0,0,0.35)';
+  s.fontFamily = SHEET_FONT.fontFamily;
+  s.fontSize = SHEET_FONT.fontSize;
+  s.lineHeight = SHEET_FONT.lineHeight;
+  s.overflow = 'hidden';
+  s.overflowWrap = 'normal';
 
-  // Header — absolutely positioned so it doesn't push the body content down.
-  // topPx is measured from the paper top and already includes the header zone.
-  if (page.header?.length) {
-    const headerEl = document.createElement('div');
-    headerEl.className = 'docx-header';
-    headerEl.style.position = 'absolute';
-    headerEl.style.top = `${page.margins.headerPx}px`;
-    headerEl.style.left = `${page.margins.leftPx}px`;
-    headerEl.style.right = `${page.margins.rightPx}px`;
-    headerEl.style.maxHeight = `${page.margins.topPx - page.margins.headerPx}px`;
-    headerEl.style.overflow = 'hidden';
-    for (const block of page.header) {
-      const el = renderBlock(block, deps);
-      if (el) headerEl.appendChild(el);
-    }
-    root.appendChild(headerEl);
+  const contentW = page.size.wPx - page.margins.leftPx - page.margins.rightPx;
+
+  // Floating (anchored) images: absolutely positioned in page coordinates,
+  // painted first so behindDoc banners sit under the content.
+  if (page.floats) {
+    for (const f of page.floats) sheet.appendChild(renderFloat(f, deps));
   }
 
-  // Content area — full page margins as padding; header/footer live above/below via position:absolute.
-  const content = document.createElement('div');
-  content.className = 'docx-content';
-  content.style.paddingTop = `${page.margins.topPx}px`;
-  content.style.paddingRight = `${page.margins.rightPx}px`;
-  content.style.paddingBottom = `${page.margins.bottomPx}px`;
-  content.style.paddingLeft = `${page.margins.leftPx}px`;
-
-  let prevParaStyle: string | undefined;
-  for (const block of page.elements) {
-    const el = renderBlock(block, deps);
-    if (el) {
-      if (
-        block.kind === 'paragraph' &&
-        block.contextualSpacing &&
-        prevParaStyle === block.styleName
-      ) {
-        el.style.marginTop = '0';
-      }
-      prevParaStyle = block.kind === 'paragraph' ? block.styleName : undefined;
-      content.appendChild(el);
-    }
+  if (page.header && page.header.length) {
+    sheet.appendChild(marginBand(page.header, deps, contentW, page.margins.leftPx, { top: px(page.margins.headerPx) }, page.index, page.resolvedStyles));
   }
-  root.appendChild(content);
-
-  // Footer — absolutely positioned at the bottom of the page.
-  if (page.footer?.length) {
-    const footerEl = document.createElement('div');
-    footerEl.className = 'docx-footer';
-    footerEl.style.position = 'absolute';
-    footerEl.style.bottom = `${page.margins.footerPx}px`;
-    footerEl.style.left = `${page.margins.leftPx}px`;
-    footerEl.style.right = `${page.margins.rightPx}px`;
-    footerEl.style.maxHeight = `${page.margins.bottomPx - page.margins.footerPx}px`;
-    footerEl.style.overflow = 'hidden';
-    for (const block of page.footer) {
-      const el = renderBlock(block, deps);
-      if (el) footerEl.appendChild(el);
-    }
-    root.appendChild(footerEl);
+  if (page.footer && page.footer.length) {
+    sheet.appendChild(marginBand(page.footer, deps, contentW, page.margins.leftPx, { bottom: px(page.margins.footerPx) }, page.index, page.resolvedStyles));
   }
 
-  return root;
+  for (const block of page.elements) sheet.appendChild(renderBlock(block, deps, page.index, page.resolvedStyles));
+  return sheet;
 }
 
-// ─── Block dispatcher ─────────────────────────────────────────────────────────
+/** A header/footer positioned inside the page's top/bottom margin band. */
+function marginBand(
+  blocks: DocxBlock[],
+  deps: RenderDeps,
+  contentW: number,
+  leftPx: number,
+  pos: { top?: string; bottom?: string },
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLDivElement {
+  const band = document.createElement('div');
+  const s = band.style;
+  s.position = 'absolute';
+  s.left = px(leftPx);
+  s.width = px(contentW);
+  if (pos.top) s.top = pos.top;
+  if (pos.bottom) s.bottom = pos.bottom;
+  s.color = '#000';
+  for (const block of blocks) band.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
+  return band;
+}
 
-export function renderBlock(block: DocxBlock, deps: RenderDeps): HTMLElement | null {
+/** Render a single block to a DOM element (also used by the paginator to measure). */
+export function renderBlock(
+  block: DocxBlock,
+  deps: RenderDeps,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
   switch (block.kind) {
-    case 'paragraph': return renderParagraph(block, deps);
-    case 'table':     return renderDocxTable(block, deps);
-    case 'image':     return renderInlineImageBlock(block, deps);
+    case 'paragraph':
+      return renderParagraph(block, pageIndex, resolvedStyles);
+    case 'table':
+      return renderTable(block, deps, pageIndex, resolvedStyles);
+    case 'image':
+      return renderImage(block, deps);
   }
 }
 
-// ─── Paragraph ────────────────────────────────────────────────────────────────
-
-function renderParagraph(para: DocxParagraph, deps: RenderDeps): HTMLDivElement {
+function renderParagraph(
+  p: DocxParagraph,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
   const el = document.createElement('div');
-  el.className = `docx-para docx-style-${cssClass(para.styleName)}`;
-  if (para.nodeId) el.dataset.docxId = para.nodeId;
+  const s = el.style;
+  s.position = 'relative';
 
-  applyParagraphStyles(el, para);
+  if (p.align) s.textAlign = ALIGN[p.align];
+  if (p.indentLeftPx !== undefined) s.marginLeft = px(p.indentLeftPx);
+  if (p.indentRightPx !== undefined) s.marginRight = px(p.indentRightPx);
+  if (p.indentFirstLinePx !== undefined) s.textIndent = px(p.indentFirstLinePx);
+  if (p.spaceBeforePt !== undefined) s.marginTop = px(ptToPx(p.spaceBeforePt));
+  if (p.spaceAfterPt !== undefined) s.marginBottom = px(ptToPx(p.spaceAfterPt));
+  if (p.lineSpacingPct !== undefined) s.lineHeight = String(p.lineSpacingPct);
+  else if (p.lineSpacingPt !== undefined) s.lineHeight = px(ptToPx(p.lineSpacingPt));
 
-  // Bullet/number prefix — rendered inline so the paragraph's own
-  // indentLeftPx (paddingLeft) + indentFirstLinePx (textIndent) produce
-  // the correct hanging-indent layout, identical to Word.
-  if (para.bullet && para.bullet.type !== 'none') {
-    const prefix = document.createElement('span');
-    prefix.className = 'docx-bullet';
-    prefix.style.userSelect = 'none';
+  if (p.baseFontFamily) s.fontFamily = quoteFont(p.baseFontFamily);
+  if (p.baseFontSizePt !== undefined) s.fontSize = px(ptToPx(p.baseFontSizePt));
+  if (p.baseBold) s.fontWeight = 'bold';
+  if (p.baseItalic) s.fontStyle = 'italic';
+  if (p.baseColorHex) s.color = `#${p.baseColorHex}`;
+  if (p.shadingHex) s.background = `#${p.shadingHex}`;
 
-    if (para.bullet.type === 'char') {
-      prefix.textContent = para.bullet.char + ' ';
-      if (para.bullet.font) prefix.style.fontFamily = `'${para.bullet.font}', sans-serif`;
-      if (para.bullet.color) prefix.style.color = colorToCss(para.bullet.color);
+  applyBorders(el, p.paraBorders);
+
+  // List marker: sits before the text; the paragraph's hanging indent (negative
+  // text-indent) pulls it into the left margin gutter, matching Word.
+  if (p.listMarker) {
+    const marker = document.createElement('span');
+    marker.textContent = p.listMarker;
+    marker.style.marginRight = '0.4em';
+    el.appendChild(marker);
+  }
+
+  if (p.runs.length === 0) {
+    // Preserve the height of an empty line.
+    el.appendChild(document.createTextNode('​'));
+  } else {
+    const hasTab = p.runs.some((r) => r.tabBefore);
+    if (hasTab) {
+      s.display = 'flex';
+      s.justifyContent = 'space-between';
+      s.alignItems = 'center';
+      s.width = '100%';
+
+      // Group runs into segments separated by tabs
+      const segments: DocxRun[][] = [];
+      let currentSegment: DocxRun[] = [];
+      for (const run of p.runs) {
+        if (run.tabBefore) {
+          segments.push(currentSegment);
+          currentSegment = [];
+        }
+        currentSegment.push(run);
+      }
+      if (currentSegment.length > 0) {
+        segments.push(currentSegment);
+      }
+
+      // Render each segment as a flex item. The segment itself is inline-block
+      // (not inline-flex) so its runs flow as normal inline text — otherwise each
+      // run becomes a flex item and flexbox trims the trailing whitespace at the
+      // item boundary, collapsing e.g. "Page " + "1" into "Page1".
+      for (const segment of segments) {
+        const segEl = document.createElement('span');
+        segEl.style.display = 'inline-block';
+        segEl.style.verticalAlign = 'middle';
+        for (const run of segment) {
+          const cleanRun = { ...run, tabBefore: false };
+          appendRun(segEl, cleanRun, pageIndex, resolvedStyles);
+        }
+        el.appendChild(segEl);
+      }
     } else {
-      prefix.textContent = '• ';
+      for (const run of p.runs) appendRun(el, run, pageIndex, resolvedStyles);
     }
-
-    el.appendChild(prefix);
   }
-
-  for (const run of para.runs) {
-    el.appendChild(renderRun(run));
-  }
-
   return el;
 }
 
-function applyParagraphStyles(el: HTMLElement, para: DocxParagraph): void {
-  // Apply style-chain defaults; runs override per-span.
-  if (para.baseFontFamily) {
-    el.style.fontFamily = `'${para.baseFontFamily}', sans-serif`;
-  }
-  if (para.baseFontSizePt !== undefined) {
-    el.style.fontSize = `${para.baseFontSizePt}pt`;
-  }
-  if (para.baseBold) el.style.fontWeight = 'bold';
-  if (para.baseItalic) el.style.fontStyle = 'italic';
-  if (para.baseColorHex) el.style.color = `#${para.baseColorHex}`;
-
-  if (para.align) {
-    const map: Record<string, string> = { l: 'left', ctr: 'center', r: 'right', just: 'justify' };
-    el.style.textAlign = map[para.align] ?? 'left';
+function appendRun(
+  parent: HTMLElement,
+  run: DocxRun,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): void {
+  if (run.breakBefore) parent.appendChild(document.createElement('br'));
+  if (run.tabBefore) {
+    const tab = document.createElement('span');
+    tab.style.display = 'inline-block';
+    tab.style.width = '0.5in';
+    parent.appendChild(tab);
   }
 
-  if (para.indentLeftPx) {
-    el.style.paddingLeft = `${para.indentLeftPx}px`;
-  }
-  if (para.indentFirstLinePx !== undefined && para.indentFirstLinePx !== 0) {
-    el.style.textIndent = `${para.indentFirstLinePx}px`;
-  }
-  if (para.indentRightPx) {
-    el.style.paddingRight = `${para.indentRightPx}px`;
-  }
-  if (para.spaceBeforePt) el.style.marginTop = `${para.spaceBeforePt}pt`;
-  if (para.spaceAfterPt) el.style.marginBottom = `${para.spaceAfterPt}pt`;
-
-  if (para.lineSpacingPct !== undefined) {
-    el.style.lineHeight = String(para.lineSpacingPct);
-  } else if (para.lineSpacingPt !== undefined) {
-    el.style.lineHeight = `${para.lineSpacingPt}pt`;
-  }
-
-  // Empty paragraphs (blank lines) should still take up space.
-  if (para.runs.every((r) => !r.text.trim())) {
-    el.style.minHeight = '1em';
-  }
-
-  if (para.shadingHex) {
-    el.style.backgroundColor = `#${para.shadingHex}`;
-  }
-  if (para.paraBorders) {
-    if (para.paraBorders.top) {
-      el.style.borderTop = strokeToCssBorder(para.paraBorders.top);
-      el.style.paddingTop = '1pt';
-    }
-    if (para.paraBorders.bottom) {
-      el.style.borderBottom = strokeToCssBorder(para.paraBorders.bottom);
-      el.style.paddingBottom = '1pt';
-    }
-    if (para.paraBorders.left) {
-      el.style.borderLeft = strokeToCssBorder(para.paraBorders.left);
-      el.style.paddingLeft = `${(para.indentLeftPx ?? 0) + 4}px`;
-    }
-    if (para.paraBorders.right) {
-      el.style.borderRight = strokeToCssBorder(para.paraBorders.right);
-    }
-  }
-}
-
-// ─── Run ──────────────────────────────────────────────────────────────────────
-
-function renderRun(run: DocxRun): HTMLElement {
-  const el = run.hyperlink
-    ? document.createElement('a')
-    : document.createElement('span');
-  el.className = 'docx-run';
-  if (run.nodeId) el.dataset.docxId = run.nodeId;
-
-  if (run.text.includes('\n') || run.text.includes('\t')) {
-    const parts = run.text.split(/(\n|\t)/);
-    for (const part of parts) {
-      if (part === '\n') {
-        el.appendChild(document.createElement('br'));
-      } else if (part === '\t') {
-        // Approximate Word's 0.5-inch default tab stop
-        const tab = document.createElement('span');
-        tab.className = 'docx-tab';
-        tab.style.display = 'inline-block';
-        tab.style.minWidth = '48px';
-        el.appendChild(tab);
-      } else if (part) {
-        el.appendChild(document.createTextNode(part));
+  let displayText = run.text;
+  if (run.fieldCode) {
+    const code = run.fieldCode.trim();
+    if (/^page$/i.test(code)) {
+      displayText = pageIndex !== undefined ? String(pageIndex + 1) : '1';
+    } else {
+      const match = /^\s*styleref\s+(?:"([^"]+)"|'([^']+)'|([^\s]+))/i.exec(code);
+      if (match) {
+        const styleName = (match[1] || match[2] || match[3] || '').toLowerCase();
+        displayText = resolvedStyles?.[styleName] ?? run.text;
       }
     }
+  }
+
+  if (!displayText) return;
+
+  const span = document.createElement('span');
+  span.textContent = displayText;
+  const s = span.style;
+  if (run.bold) s.fontWeight = 'bold';
+  if (run.italic) s.fontStyle = 'italic';
+  const deco: string[] = [];
+  if (run.underline) deco.push('underline');
+  if (run.strike) deco.push('line-through');
+  if (deco.length) s.textDecoration = deco.join(' ');
+  if (run.sizePt !== undefined) s.fontSize = px(ptToPx(run.sizePt));
+  if (run.colorHex) s.color = `#${run.colorHex}`;
+  if (run.highlightHex) s.background = `#${run.highlightHex}`;
+  if (run.font) s.fontFamily = quoteFont(run.font);
+  if (run.caps === 'all') s.textTransform = 'uppercase';
+  else if (run.caps === 'small') s.fontVariant = 'small-caps';
+  if (run.vertAlign === 'super') {
+    s.verticalAlign = 'super';
+    s.fontSize = 'smaller';
+  } else if (run.vertAlign === 'sub') {
+    s.verticalAlign = 'sub';
+    s.fontSize = 'smaller';
+  }
+
+  if (run.hyperlink) {
+    const a = document.createElement('a');
+    a.href = run.hyperlink;
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.style.color = run.colorHex ? `#${run.colorHex}` : '#0563c1';
+    a.appendChild(span);
+    parent.appendChild(a);
   } else {
-    el.textContent = run.text;
-  }
-
-  applyRunStyles(el, run);
-
-  if (run.hyperlink && el instanceof HTMLAnchorElement) {
-    el.href = run.hyperlink;
-    el.target = '_blank';
-    el.rel = 'noopener noreferrer';
-    // Color comes from the document's Hyperlink character style (already in run.color).
-    // Only fall back to the Word default if no color was specified in the document.
-    if (!run.color) el.style.color = '#0563C1';
-  }
-
-  return el;
-}
-
-function applyRunStyles(el: HTMLElement, run: DocxRun): void {
-  if (run.bold) el.style.fontWeight = 'bold';
-  if (run.italic) el.style.fontStyle = 'italic';
-  if (run.underline) el.style.textDecoration = 'underline';
-  if (run.strike) el.style.textDecoration = (el.style.textDecoration ? el.style.textDecoration + ' ' : '') + 'line-through';
-  if (run.sizePt !== undefined) el.style.fontSize = `${run.sizePt}pt`;
-  if (run.color) el.style.color = colorToCss(run.color);
-  if (run.font) el.style.fontFamily = `'${run.font}', sans-serif`;
-  if (run.caps === 'all') el.style.textTransform = 'uppercase';
-  if (run.caps === 'small') el.style.fontVariant = 'small-caps';
-  if (run.highlight) el.style.backgroundColor = colorToCss(run.highlight);
-  if (run.baseline !== undefined && run.baseline !== 0) {
-    el.style.verticalAlign = run.baseline > 0 ? 'super' : 'sub';
-    el.style.fontSize = '0.75em';
-  }
-  if (run.letterSpacingPt !== undefined) {
-    el.style.letterSpacing = `${run.letterSpacingPt}pt`;
+    parent.appendChild(span);
   }
 }
 
-// ─── Table ────────────────────────────────────────────────────────────────────
+function renderTable(
+  table: DocxTable,
+  deps: RenderDeps,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
+  const t = document.createElement('table');
+  t.style.borderCollapse = 'collapse';
+  t.style.tableLayout = 'fixed';
+  if (table.widthPx) t.style.width = px(table.widthPx);
+  if (table.indentPx) t.style.marginLeft = px(table.indentPx);
 
-function renderDocxTable(table: DocxTable, deps: RenderDeps): HTMLTableElement {
-  const tableEl = document.createElement('table');
-  tableEl.className = 'docx-table';
-  tableEl.style.borderCollapse = 'collapse';
-  tableEl.style.tableLayout = 'fixed';
-  if (table.widthPx) tableEl.style.width = `${table.widthPx}px`;
-
-  const colGroup = document.createElement('colgroup');
-  for (const w of table.colWidths) {
-    const col = document.createElement('col');
-    col.style.width = `${w}px`;
-    colGroup.appendChild(col);
+  if (table.colWidths.length) {
+    const cg = document.createElement('colgroup');
+    for (const w of table.colWidths) {
+      const col = document.createElement('col');
+      if (w) col.style.width = px(w);
+      cg.appendChild(col);
+    }
+    t.appendChild(cg);
   }
-  tableEl.appendChild(colGroup);
 
   const tbody = document.createElement('tbody');
   for (const row of table.rows) {
-    const trEl = document.createElement('tr');
+    const tr = document.createElement('tr');
     for (const cell of row) {
-      if (cell === null) continue;
-      trEl.appendChild(renderTableCell(cell, deps));
+      if (cell === null) continue; // covered by a span
+      tr.appendChild(renderCell(cell, deps, pageIndex, resolvedStyles));
     }
-    tbody.appendChild(trEl);
+    tbody.appendChild(tr);
   }
-  tableEl.appendChild(tbody);
-  return tableEl;
+  t.appendChild(tbody);
+  return t;
 }
 
-function renderTableCell(cell: DocxTableCell, deps: RenderDeps): HTMLTableCellElement {
+function renderCell(
+  cell: DocxTableCell,
+  deps: RenderDeps,
+  pageIndex?: number,
+  resolvedStyles?: Record<string, string>,
+): HTMLElement {
   const td = document.createElement('td');
-  td.className = 'docx-cell';
-  if (cell.nodeId) td.dataset.docxId = cell.nodeId;
   if (cell.colSpan > 1) td.colSpan = cell.colSpan;
   if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
-
-  // Use document cell margins; fall back to DOCX default (0 top/bottom, ~7px left/right).
+  const s = td.style;
+  s.verticalAlign = cell.vAlign ?? 'top';
+  if (cell.fillHex) {
+    s.background = `#${cell.fillHex}`;
+    // Word's "automatic" font color flips to white on a dark fill for contrast.
+    // Set it as the cell default so explicit run/paragraph colors still win.
+    if (isDarkFill(cell.fillHex)) s.color = '#fff';
+  }
   if (cell.cellPaddingPx) {
-    const { top, right, bottom, left } = cell.cellPaddingPx;
-    td.style.padding = `${top}px ${right}px ${bottom}px ${left}px`;
+    const p = cell.cellPaddingPx;
+    s.padding = `${p.top}px ${p.right}px ${p.bottom}px ${p.left}px`;
   } else {
-    td.style.padding = '0 7px';
+    s.padding = '2px 5px';
   }
-  td.style.verticalAlign = cell.vAlign ?? 'top';
-  td.style.wordBreak = 'break-word';
-
-  // Fill
-  if (cell.fill.type === 'solid') {
-    td.style.backgroundColor = colorToCss(cell.fill.color);
-  }
-
-  // Borders — fully document-driven; no fallback added by the renderer.
+  s.wordBreak = 'keep-all';
+  s.overflowWrap = 'normal';
   if (cell.borders) {
-    const { l, t, r, b } = cell.borders;
-    if (l) td.style.borderLeft = strokeToCssBorder(l);
-    if (t) td.style.borderTop = strokeToCssBorder(t);
-    if (r) td.style.borderRight = strokeToCssBorder(r);
-    if (b) td.style.borderBottom = strokeToCssBorder(b);
+    if (cell.borders.l) s.borderLeft = strokeCss(cell.borders.l);
+    if (cell.borders.t) s.borderTop = strokeCss(cell.borders.t);
+    if (cell.borders.r) s.borderRight = strokeCss(cell.borders.r);
+    if (cell.borders.b) s.borderBottom = strokeCss(cell.borders.b);
   }
 
-  for (const para of cell.content) {
-    td.appendChild(renderParagraph(para, deps));
-  }
-
+  for (const block of cell.content) td.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
+  if (!cell.content.length) td.appendChild(document.createTextNode('​'));
   return td;
 }
 
-// ─── Inline image block ───────────────────────────────────────────────────────
-
-function renderInlineImageBlock(image: DocxInlineImage, deps: RenderDeps): HTMLElement {
-  const wrapper = document.createElement('div');
-  wrapper.className = 'docx-image';
-  if (image.nodeId) wrapper.dataset.docxId = image.nodeId;
-  wrapper.style.display = 'block';
-
-  const url = deps.imageUrl(image.part);
+function renderFloat(f: DocxFloat, deps: RenderDeps): HTMLElement {
+  const url = deps.imageUrl(f.part);
+  const el = document.createElement(url ? 'img' : 'div') as HTMLElement;
+  const s = el.style;
+  s.position = 'absolute';
+  s.left = px(f.xPx);
+  s.top = px(f.yPx);
+  s.width = px(f.wPx);
+  s.height = px(f.hPx);
+  s.zIndex = f.behindDoc ? '0' : '2';
   if (url) {
-    const img = document.createElement('img');
-    img.src = url;
-    img.alt = image.alt ?? '';
-    img.style.width = `${image.widthPx}px`;
-    img.style.height = `${image.heightPx}px`;
-    img.style.maxWidth = '100%';
-    img.style.display = 'block';
-    wrapper.appendChild(img);
+    (el as HTMLImageElement).src = url;
+    if (f.alt) (el as HTMLImageElement).alt = f.alt;
   }
-
-  return wrapper;
+  return el;
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function strokeToCssBorder(stroke: Stroke): string {
-  const style = stroke.dash ? 'dashed' : 'solid';
-  return `${stroke.width}px ${style} ${colorToCss(stroke.color)}`;
+function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {
+  const url = deps.imageUrl(img.part);
+  if (!url) {
+    const ph = document.createElement('div');
+    ph.textContent = img.alt ?? '[image]';
+    ph.style.cssText = 'color:#999;font-style:italic;padding:4px 0;';
+    return ph;
+  }
+  const el = document.createElement('img');
+  el.src = url;
+  if (img.widthPx) el.style.width = px(img.widthPx);
+  if (img.heightPx) el.style.height = px(img.heightPx);
+  el.style.maxWidth = '100%';
+  if (img.alt) el.alt = img.alt;
+  el.style.display = 'block';
+  return el;
 }
 
-function cssClass(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+// ─── Helpers ───────────────────────────────────────────────────────────────────
+
+function applyBorders(el: HTMLElement, borders: DocxParagraph['paraBorders']): void {
+  if (!borders) return;
+  if (borders.top) el.style.borderTop = strokeCss(borders.top);
+  if (borders.bottom) el.style.borderBottom = strokeCss(borders.bottom);
+  if (borders.left) el.style.borderLeft = strokeCss(borders.left);
+  if (borders.right) el.style.borderRight = strokeCss(borders.right);
+}
+
+function strokeCss(stroke: Stroke): string {
+  return `${Math.max(1, stroke.width)}px solid #${stroke.color.hex}`;
+}
+
+/** Perceived-luminance test for cell fills, to pick auto white/black text. */
+function isDarkFill(hex: string): boolean {
+  const h = hex.replace(/^#/, '');
+  if (h.length < 6) return false;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return 0.299 * r + 0.587 * g + 0.114 * b < 128;
+}
+
+/** Known serif families, so an uninstalled font falls back to the right generic. */
+const SERIF = /times|georgia|cambria|garamond|minion|book antiqua|palatino|serif|roman|constantia/i;
+
+/**
+ * Build a CSS font stack with a generic fallback. Word's default fonts (Calibri,
+ * etc.) are rarely installed on non-Windows machines; without a generic the
+ * browser falls back to serif, which looks nothing like Word. Pick serif vs
+ * sans-serif by family name so the substitute is close.
+ */
+function quoteFont(name: string): string {
+  const quoted = /\s/.test(name) ? `"${name}"` : name;
+  const generic = SERIF.test(name) ? 'serif' : 'sans-serif';
+  return `${quoted}, ${generic}`;
 }

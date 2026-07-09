@@ -5,31 +5,54 @@
  * colors are resolved hex strings. The DOM renderer consumes only this model —
  * it never touches XML.
  *
- * Shared types (TextRun, Bullet, Color, Fill, Stroke) are re-exported from the
- * PPTX model since Word uses the same DrawingML primitives.
+ * Shared DrawingML primitives (Color, Fill, Stroke, TextAlign, EmbeddedFont)
+ * are re-exported as *types* from the PPTX model since Word uses the same
+ * primitives. This is a type-only import — it creates no runtime dependency on
+ * the pptx/ slice.
  */
-import type { Stroke, TextRun } from '../pptx/model.js';
+import type { Stroke } from '../pptx/model.js';
 
 export type {
   Color,
   Fill,
   GradientStop,
   Stroke,
-  TextRun,
-  Bullet,
   TextAlign,
   EmbeddedFont,
   EmbeddedFontFace,
 } from '../pptx/model.js';
 
-/**
- * A text run tagged with the id of its source `<w:r>` node, so an edit made on
- * the rendered DOM can be mapped back to the exact OOXML element to mutate.
- * `nodeId` is only populated when the document is loaded in editable mode.
- */
-export type DocxRun = TextRun & { nodeId?: string };
+// ─── Inline content ──────────────────────────────────────────────────────────
 
-// ─── Page geometry ──────────────────────────────────────────────────────────
+/** A contiguous run of text with uniform character formatting (<w:r>). */
+export interface DocxRun {
+  text: string;
+  fieldCode?: string;
+  bold?: boolean;
+  italic?: boolean;
+  underline?: boolean;
+  strike?: boolean;
+  /** Resolved font size in points. */
+  sizePt?: number;
+  /** Resolved text color hex (no leading #). */
+  colorHex?: string;
+  /** Highlight color hex behind the run (<w:highlight> / <w:shd>). */
+  highlightHex?: string;
+  /** Resolved typeface name. */
+  font?: string;
+  /** Super/subscript: 'super' | 'sub'. */
+  vertAlign?: 'super' | 'sub';
+  /** Small caps / all caps. */
+  caps?: 'all' | 'small';
+  /** Hyperlink target (resolved external URL or internal anchor). */
+  hyperlink?: string;
+  /** A hard line break inside the paragraph (<w:br/>) precedes this run's text. */
+  breakBefore?: boolean;
+  /** A tab stop (<w:tab/>) precedes this run's text. */
+  tabBefore?: boolean;
+}
+
+// ─── Page geometry ────────────────────────────────────────────────────────────
 
 export interface DocxPageSize {
   wPx: number;
@@ -45,20 +68,18 @@ export interface DocxPageMargins {
   footerPx: number;
 }
 
-// ─── Block elements ──────────────────────────────────────────────────────────
+// ─── Block elements ────────────────────────────────────────────────────────────
 
 export type DocxBlock = DocxParagraph | DocxTable | DocxInlineImage;
 
 export interface DocxParagraph {
   kind: 'paragraph';
   runs: DocxRun[];
-  /** Id of the source `<w:p>` node (editable mode only). */
-  nodeId?: string;
   /** Resolved style name, e.g. 'Normal', 'Heading1'. */
   styleName: string;
   /** Paragraph default font family from the style chain (not hardcoded). */
   baseFontFamily?: string;
-  /** Paragraph default font size in pt from the style chain (not hardcoded). */
+  /** Paragraph default font size in pt from the style chain. */
   baseFontSizePt?: number;
   /** Paragraph default bold from the style chain. */
   baseBold?: boolean;
@@ -71,20 +92,21 @@ export interface DocxParagraph {
   indentLeftPx?: number;
   /** First-line indent in px (negative = hanging indent for bullets). */
   indentFirstLinePx?: number;
+  /** Right indent in px. */
+  indentRightPx?: number;
   spaceBeforePt?: number;
   spaceAfterPt?: number;
   /** Line spacing as a multiple of font size (1 = single, 1.5, 2, etc.). */
   lineSpacingPct?: number;
   /** Absolute line spacing in points. */
   lineSpacingPt?: number;
-  bullet?: import('../pptx/model.js').Bullet;
+  /** Bullet / number marker text, pre-resolved from numbering.xml. */
+  listMarker?: string;
   /** List indentation level, 0-based. */
   level?: number;
   keepTogether?: boolean;
   pageBreakBefore?: boolean;
   shadingHex?: string;
-  /** Right indent in px. */
-  indentRightPx?: number;
   /** Suppress spacing between consecutive paragraphs with the same style. */
   contextualSpacing?: boolean;
   /** Paragraph-level borders (from <w:pBdr>). */
@@ -99,20 +121,20 @@ export interface DocxTable {
   colWidths: number[];
   /** rows[r][c] — null for cells covered by a span. */
   rows: (DocxTableCell | null)[][];
+  /** Table indent in px from <w:tblInd> (negative pulls left into the margin). */
+  indentPx?: number;
 }
 
 export interface DocxTableCell {
-  content: DocxParagraph[];
-  /** Id of the source `<w:tc>` node (editable mode only). */
-  nodeId?: string;
-  fill: import('../pptx/model.js').Fill;
+  content: DocxBlock[];
+  fillHex?: string;
   rowSpan: number;
   colSpan: number;
   borders?: Partial<{
-    l: import('../pptx/model.js').Stroke;
-    t: import('../pptx/model.js').Stroke;
-    r: import('../pptx/model.js').Stroke;
-    b: import('../pptx/model.js').Stroke;
+    l: Stroke;
+    t: Stroke;
+    r: Stroke;
+    b: Stroke;
   }>;
   vAlign?: 'top' | 'center' | 'bottom';
   /** Cell padding in px from <w:tcMar> or table-level <w:tblCellMar>. */
@@ -123,19 +145,51 @@ export interface DocxInlineImage {
   kind: 'image';
   /** Resolved media part path inside the OPC package. */
   part: string;
-  /** Id of the source `<w:r>` node wrapping the `<w:drawing>` (editable mode only). */
-  nodeId?: string;
   widthPx: number;
   heightPx: number;
   alt?: string;
 }
 
-// ─── Page ────────────────────────────────────────────────────────────────────
+/**
+ * A floating (anchored) image positioned absolutely on the page, in page
+ * coordinates (px from the page's top-left). Used for header/footer banners and
+ * other <wp:anchor> drawings that bleed outside the text margins.
+ */
+export interface DocxFloat {
+  part: string;
+  xPx: number;
+  yPx: number;
+  wPx: number;
+  hPx: number;
+  /** Drawn behind the text layer (<wp:anchor behindDoc>). */
+  behindDoc: boolean;
+  alt?: string;
+}
+
+// ─── Section (parse output) ──────────────────────────────────────────────────
 
 /**
- * A single rendered page. Width is fixed to the section page size; height is
- * auto (content-driven) so nothing is clipped. The viewer navigates pages like
- * PPTX slides, scaling by width to fit the container.
+ * One document section (delimited by <w:sectPr>): its page geometry plus the
+ * full block flow and the header/footer content for its pages. The paginator
+ * flows a section's blocks into one or more fixed-size {@link DocxPage}s.
+ */
+export interface DocxSection {
+  index: number;
+  size: DocxPageSize;
+  margins: DocxPageMargins;
+  blocks: DocxBlock[];
+  header?: DocxBlock[];
+  footer?: DocxBlock[];
+  /** Page-anchored floating images (e.g. header/footer banners), page coords. */
+  floats?: DocxFloat[];
+}
+
+// ─── Page (paginated output) ───────────────────────────────────────────────────
+
+/**
+ * A single fixed-size page produced by the paginator: the section page size,
+ * the slice of blocks that fit within the content area (between the top and
+ * bottom margins), and the section's header/footer drawn in the margin bands.
  */
 export interface DocxPage {
   index: number;
@@ -144,11 +198,15 @@ export interface DocxPage {
   elements: DocxBlock[];
   header?: DocxBlock[];
   footer?: DocxBlock[];
+  /** Page-anchored floating images drawn absolutely on the sheet. */
+  floats?: DocxFloat[];
+  /** Resolved text for style references, keyed by style name (lowercased). */
+  resolvedStyles?: Record<string, string>;
 }
 
-// ─── Document ────────────────────────────────────────────────────────────────
+// ─── Document ──────────────────────────────────────────────────────────────────
 
 export interface DocxDocumentData {
-  pages: DocxPage[];
+  sections: DocxSection[];
   embeddedFonts: import('../pptx/model.js').EmbeddedFont[];
 }

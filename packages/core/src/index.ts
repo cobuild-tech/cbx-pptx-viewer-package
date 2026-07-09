@@ -1,9 +1,10 @@
 /**
- * @cobuildx.ai/office-viewer — framework-agnostic .pptx and .docx parser and DOM renderer.
- * React bindings are available from '@cobuildx.ai/office-viewer/react'.
+ * @cobuildx.ai/office-viewer — framework-agnostic .pptx and .docx parser and
+ * DOM renderer. React bindings are available from
+ * '@cobuildx.ai/office-viewer/react'.
  *
  * PPTX pipeline: read (OPC) -> parse (XML -> model) -> resolve (inheritance) -> render (DOM)
- * DOCX pipeline: read (OPC) -> parse (XML -> model) -> paginate (sections) -> render (DOM)
+ * DOCX pipeline: read (OPC) -> parse (XML -> model) -> paginate (sections)    -> render (DOM)
  *
  * PPTX usage:
  *   const deck = loadPptx(arrayBuffer);
@@ -11,10 +12,9 @@
  *   viewer.next(); viewer.goTo(3);
  *   // when done: viewer.destroy(); deck.dispose();
  *
- * DOCX usage:
+ * DOCX usage (read-only):
  *   const doc = loadDocx(arrayBuffer);
  *   const viewer = createDocxViewer(doc, containerEl, { fit: 'width' });
- *   viewer.next(); viewer.goTo(2);
  *   // when done: viewer.destroy(); doc.dispose();
  */
 
@@ -33,55 +33,31 @@ export function loadPptx(data: ArrayBuffer | Uint8Array): Deck {
 
 // ─── DOCX ────────────────────────────────────────────────────────────────────
 export { DocxDocument } from './docx/document/document.js';
-export { DocxViewer, createDocxViewer, type DocxViewerOptions } from './docx/viewer/viewer.js';
-export { type EditContext } from './docx/viewer/editing.js';
-export { selectionToRunSegments, domRunText, type RunSegment } from './docx/edit/selection.js';
-export { renderPage as renderDocxPage } from './docx/render/dom.js';
+export {
+  DocxViewer,
+  createDocxViewer,
+  type DocxViewerOptions,
+} from './docx/viewer/viewer.js';
+export { renderPage as renderDocxPage, type RenderDeps as DocxRenderDeps } from './docx/render/dom.js';
 export { DocxRelType } from './docx/relTypes.js';
-
-import { DocxDocument } from './docx/document/document.js';
-/** Load a .docx from raw bytes into a renderable {@link DocxDocument}. */
-export function loadDocx(data: ArrayBuffer | Uint8Array): DocxDocument {
-  return DocxDocument.load(data);
-}
-
 export type {
+  DocxSection,
   DocxPage,
   DocxBlock,
   DocxParagraph,
   DocxTable,
   DocxTableCell,
   DocxInlineImage,
+  DocxRun,
   DocxPageSize,
   DocxPageMargins,
-  DocxRun,
 } from './docx/model.js';
 
-// ─── DOCX editing ─────────────────────────────────────────────────────────────
-export {
-  applyOp,
-  ops as docxEditOps,
-  splitRunOps,
-  type EditOp,
-  type RunPropPatch,
-  type ParaPropPatch,
-  type ParaAlign,
-} from './docx/edit/ops.js';
-export {
-  encodeNodeId,
-  decodeNodeId,
-  parentNodeId,
-  indexOfNodeId,
-  type NodeRef,
-} from './docx/edit/nodeId.js';
-export {
-  InMemoryVersionStore,
-  hashString,
-  type DocxVersionStore,
-  type VersionMeta,
-  type VersionInput,
-  type VersionPayload,
-} from './docx/edit/versions.js';
+import { DocxDocument } from './docx/document/document.js';
+/** Load a .docx from raw bytes into a renderable {@link DocxDocument}. */
+export function loadDocx(data: ArrayBuffer | Uint8Array): DocxDocument {
+  return DocxDocument.load(data);
+}
 
 // ─── Shared low-level building blocks ────────────────────────────────────────
 export { OpcPackage, type Relationship } from './oxml/package.js';

@@ -1,127 +1,144 @@
 /**
- * Run parser for WordprocessingML.
+ * Run parsing: <w:r> (and hyperlink-wrapped runs) -> DocxRun[].
  *
- * Parses <w:r> elements (and the <w:rPr> run-properties block) into TextRun IR
- * nodes. Inherits base properties from the paragraph's resolved style, then
- * applies any run-level overrides.
+ * A single <w:r> can contain multiple text/break/tab children in document
+ * order; we emit one DocxRun per <w:t>, carrying a break/tab flag from any
+ * preceding <w:br>/<w:tab> so the renderer reproduces intra-run layout.
  */
-import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
+import { children, child, attr, localName, type XmlNode } from '../../oxml/xml.js';
 import { halfPtToPt } from '../units.js';
-import type { TextRun, Color } from '../model.js';
-import type { ResolvedRunStyle } from '../styles/styles.js';
-import { mergeRunProps, StyleMap } from '../styles/styles.js';
+import { rPrFrom, mergeRun, type RunProps } from '../styles/styles.js';
+import type { DocxRun } from '../model.js';
+import type { ParseContext } from '../document/context.js';
 
-/**
- * Parse a single <w:r> into a TextRun, inheriting from the resolved style.
- * Returns null if the run has no printable text (e.g. only a page break).
- */
-export function parseRun(
-  rEl: XmlNode,
-  baseStyle: ResolvedRunStyle,
-  resolveImage?: (relId: string) => string | undefined,
-  styles?: StyleMap,
-): TextRun | null {
-  // Collect text from <w:t> children (may be multiple for preserved spaces).
-  const textParts: string[] = [];
-  for (const child_ of rEl.children) {
-    const name = localName(child_.name);
-    if (name === 't') {
-      textParts.push(child_.text ?? '');
-    } else if (name === 'br') {
-      const type_ = attr(child_, 'w:type') ?? attr(child_, 'type');
-      // Page/column breaks are handled at paragraph level; line breaks become \n.
-      if (!type_ || type_ === 'textWrapping') textParts.push('\n');
-    }
+export interface FieldState {
+  inField: boolean;
+  fieldInstr: string;
+  inSeparate: boolean;
+}
+
+/** Parse the runs inside a paragraph child (<w:r> or <w:hyperlink>). */
+export function parseRunContainer(
+  node: XmlNode,
+  baseRun: RunProps,
+  ctx: ParseContext,
+  fieldState?: FieldState,
+  hyperlink?: string,
+): DocxRun[] {
+  const name = localName(node.name);
+  if (name === 'hyperlink') {
+    const rel = ctx.rel(attr(node, 'id'));
+    const href = rel?.mode === 'External' ? rel.target : undefined;
+    const anchor = attr(node, 'anchor');
+    const target = href ?? (anchor ? `#${anchor}` : undefined);
+    const out: DocxRun[] = [];
+    for (const r of children(node, 'r')) out.push(...parseRun(r, baseRun, ctx, fieldState, target));
+    return out;
   }
-  if (textParts.length === 0) return null;
-  const text = textParts.join('');
+  if (name === 'r') return parseRun(node, baseRun, ctx, fieldState, hyperlink);
+  return [];
+}
 
-  // Merge run properties on top of the inherited style.
-  const style: ResolvedRunStyle = { ...baseStyle };
-  const rPr = child(rEl, 'rPr');
-  if (rPr && styles) {
-    const rStyleEl = child(rPr, 'rStyle');
-    if (rStyleEl) {
-      const rStyleId = attr(rStyleEl, 'w:val') ?? attr(rStyleEl, 'val');
-      if (rStyleId) {
-        const charStyle = styles.get(rStyleId);
-        // Merge character style run props (lower priority than explicit rPr)
-        const cr = charStyle.run;
-        if (cr.bold !== undefined) style.bold = cr.bold;
-        if (cr.italic !== undefined) style.italic = cr.italic;
-        if (cr.underline !== undefined) style.underline = cr.underline;
-        if (cr.strike !== undefined) style.strike = cr.strike;
-        if (cr.sizePt !== undefined) style.sizePt = cr.sizePt;
-        if (cr.colorHex !== undefined) style.colorHex = cr.colorHex;
-        if (cr.fontAscii !== undefined) style.fontAscii = cr.fontAscii;
-        if (cr.fontHAnsi !== undefined) style.fontHAnsi = cr.fontHAnsi;
-        if (cr.caps !== undefined) style.caps = cr.caps;
+function parseRun(
+  r: XmlNode,
+  baseRun: RunProps,
+  ctx: ParseContext,
+  fieldState?: FieldState,
+  hyperlink?: string,
+): DocxRun[] {
+  const props = mergeRun(baseRun, resolveRunStyle(r, ctx));
+  const out: DocxRun[] = [];
+  let pendingBreak = false;
+  let pendingTab = false;
+
+  for (const node of r.children) {
+    const tagName = localName(node.name);
+    switch (tagName) {
+      case 'fldChar': {
+        const type = attr(node, 'fldCharType');
+        if (type === 'begin') {
+          if (fieldState) {
+            fieldState.inField = true;
+            fieldState.fieldInstr = '';
+            fieldState.inSeparate = false;
+          }
+        } else if (type === 'separate') {
+          if (fieldState) {
+            fieldState.inSeparate = true;
+          }
+        } else if (type === 'end') {
+          if (fieldState) {
+            fieldState.inField = false;
+            fieldState.inSeparate = false;
+            fieldState.fieldInstr = '';
+          }
+        }
+        break;
       }
+      case 'instrText': {
+        if (fieldState && fieldState.inField) {
+          fieldState.fieldInstr += node.text ?? '';
+        }
+        break;
+      }
+      case 'br':
+        pendingBreak = true;
+        break;
+      case 'tab':
+        pendingTab = true;
+        break;
+      case 't': {
+        const run = makeRun(node.text ?? '', props, hyperlink, pendingBreak, pendingTab);
+        if (fieldState && fieldState.inField && fieldState.inSeparate) {
+          run.fieldCode = fieldState.fieldInstr;
+        }
+        out.push(run);
+        pendingBreak = false;
+        pendingTab = false;
+        break;
+      }
+      case 'cr':
+        pendingBreak = true;
+        break;
+      default:
+        break;
     }
   }
-  if (rPr) mergeRunProps(style, rPr);
 
-  const run: TextRun = { text };
-  if (style.bold) run.bold = true;
-  if (style.italic) run.italic = true;
-  if (style.underline) run.underline = true;
-  if (style.strike) run.strike = true;
-  if (style.sizePt !== undefined) run.sizePt = style.sizePt;
-  if (style.colorHex) run.color = { hex: style.colorHex };
-  if (style.fontAscii || style.fontHAnsi) run.font = style.fontAscii ?? style.fontHAnsi;
-  if (style.caps) run.caps = style.caps;
-  if (style.highlight) run.highlight = highlightNameToColor(style.highlight);
-  if (style.letterSpacingPt !== undefined && style.letterSpacingPt !== 0) {
-    run.letterSpacingPt = style.letterSpacingPt;
+  // A run that is only a <w:br>/<w:tab> with no text still needs to emit the break.
+  if (out.length === 0 && (pendingBreak || pendingTab)) {
+    out.push(makeRun('', props, hyperlink, pendingBreak, pendingTab));
   }
+  return out;
+}
 
-  // Vertical alignment (super/subscript).
-  if (rPr) {
-    const vertEl = child(rPr, 'vertAlign');
-    if (vertEl) {
-      const val = attr(vertEl, 'w:val') ?? attr(vertEl, 'val');
-      if (val === 'superscript') run.baseline = 30;
-      if (val === 'subscript') run.baseline = -25;
-    }
-  }
+function resolveRunStyle(r: XmlNode, ctx: ParseContext): RunProps {
+  const rPr = child(r, 'rPr');
+  const charStyleId = attr(child(rPr, 'rStyle'), 'val');
+  const fromStyle = charStyleId ? ctx.styles.resolveCharStyle(charStyleId) : {};
+  return mergeRun(fromStyle, rPrFrom(rPr));
+}
 
+function makeRun(
+  text: string,
+  props: RunProps,
+  hyperlink: string | undefined,
+  breakBefore: boolean,
+  tabBefore: boolean,
+): DocxRun {
+  const run: DocxRun = { text };
+  if (props.bold) run.bold = true;
+  if (props.italic) run.italic = true;
+  if (props.underline) run.underline = true;
+  if (props.strike) run.strike = true;
+  if (props.sizeHalfPt !== undefined) run.sizePt = halfPtToPt(props.sizeHalfPt);
+  if (props.colorHex) run.colorHex = props.colorHex;
+  if (props.highlightHex) run.highlightHex = props.highlightHex;
+  if (props.font) run.font = props.font;
+  if (props.vertAlign) run.vertAlign = props.vertAlign;
+  if (props.caps) run.caps = props.caps;
+  if (hyperlink) run.hyperlink = hyperlink;
+  if (breakBefore) run.breakBefore = true;
+  if (tabBefore) run.tabBefore = true;
   return run;
-}
-
-/**
- * Check if a run contains a page break (<w:br w:type="page">).
- * Used by the paragraph parser to split pages.
- */
-export function runHasPageBreak(rEl: XmlNode): boolean {
-  for (const child_ of rEl.children) {
-    if (localName(child_.name) === 'br') {
-      const type_ = attr(child_, 'w:type') ?? attr(child_, 'type');
-      if (type_ === 'page') return true;
-    }
-  }
-  return false;
-}
-
-const HIGHLIGHT_COLORS: Record<string, string> = {
-  yellow: 'FFFF00',
-  green: '00FF00',
-  cyan: '00FFFF',
-  magenta: 'FF00FF',
-  blue: '0000FF',
-  red: 'FF0000',
-  darkBlue: '00008B',
-  darkCyan: '008B8B',
-  darkGreen: '006400',
-  darkMagenta: '8B008B',
-  darkRed: '8B0000',
-  darkYellow: '808000',
-  darkGray: 'A9A9A9',
-  lightGray: 'D3D3D3',
-  black: '000000',
-  white: 'FFFFFF',
-};
-
-function highlightNameToColor(name: string): Color | undefined {
-  const hex = HIGHLIGHT_COLORS[name];
-  return hex ? { hex } : undefined;
 }
