@@ -161,6 +161,7 @@ function renderParagraph(
   deps: RenderDeps,
   pageIndex?: number,
   resolvedStyles?: Record<string, string>,
+  flowAnchorSink?: DocxAnchor[],
 ): HTMLElement {
   const el = document.createElement('div');
   const s = el.style;
@@ -238,9 +239,15 @@ function renderParagraph(
   }
 
   // Flow-framed anchors (relativeFrom column/paragraph) position within this
-  // paragraph. Page-framed anchors are hoisted to the sheet by renderPage.
+  // paragraph. Page-framed anchors are hoisted to the sheet by renderPage. When
+  // a sink is supplied (paragraph inside a table cell), flow anchors are hoisted
+  // to the cell instead, so a vertically-centered cell doesn't drag them down.
   if (p.anchors) {
-    for (const a of p.anchors) if (!isPageAnchored(a)) el.appendChild(renderAnchor(a, deps));
+    for (const a of p.anchors) {
+      if (isPageAnchored(a)) continue;
+      if (flowAnchorSink) flowAnchorSink.push(a);
+      else el.appendChild(renderAnchor(a, deps));
+    }
   }
   return el;
 }
@@ -363,6 +370,9 @@ function renderCell(
   if (cell.colSpan > 1) td.colSpan = cell.colSpan;
   if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
   const s = td.style;
+  // Positioning context for the cell's floating anchors (hoisted off their
+  // paragraphs so a centered cell doesn't shift them).
+  s.position = 'relative';
   s.verticalAlign = cell.vAlign ?? 'top';
   if (cell.fillHex) {
     s.background = `#${cell.fillHex}`;
@@ -385,7 +395,16 @@ function renderCell(
     if (cell.borders.b) s.borderBottom = strokeCss(cell.borders.b);
   }
 
-  for (const block of cell.content) td.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
+  const flowAnchors: DocxAnchor[] = [];
+  for (const block of cell.content) {
+    if (block.kind === 'paragraph') {
+      td.appendChild(renderParagraph(block, deps, pageIndex, resolvedStyles, flowAnchors));
+    } else {
+      td.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
+    }
+  }
+  // Cell-hoisted floating anchors, positioned against the cell (top-aligned).
+  for (const a of flowAnchors) td.appendChild(renderAnchor(a, deps));
   if (!cell.content.length) td.appendChild(document.createTextNode('​'));
   return td;
 }
