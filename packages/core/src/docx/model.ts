@@ -50,6 +50,75 @@ export interface DocxRun {
   breakBefore?: boolean;
   /** A tab stop (<w:tab/>) precedes this run's text. */
   tabBefore?: boolean;
+  /**
+   * An inline drawing (<w:drawing wp:inline> / inline VML) occupying this run's
+   * slot in the text flow. When set, {@link text} is empty and the run renders
+   * the drawing inline-block, so paragraph alignment (e.g. centered) applies.
+   */
+  drawing?: DocxDrawing;
+}
+
+// ─── Drawings (pictures + DrawingML shapes) ──────────────────────────────────
+
+/** Preset shape geometry (<a:prstGeom prst>), reduced to what CSS can express. */
+export type DocxGeom = 'rect' | 'roundRect' | 'ellipse' | 'line' | 'other';
+
+/**
+ * A DrawingML shape (<wps:wsp>) or VML shape: a filled/outlined box that may
+ * contain its own block flow (a text box). Used for cover-page banners, callout
+ * boxes, etc. Sized in px; the payload text is a nested block flow.
+ */
+export interface DocxShape {
+  kind: 'shape';
+  geom: DocxGeom;
+  widthPx: number;
+  heightPx: number;
+  /** Solid fill hex (no leading #). */
+  fillHex?: string;
+  /** Outline color hex (no leading #). */
+  lineHex?: string;
+  lineWidthPx?: number;
+  /** Text-box content (<w:txbxContent>), rendered inside the shape. */
+  content: DocxBlock[];
+  /** Vertical anchoring of the text box: 'ctr' | 'top' | 'bottom'. */
+  vAnchor?: 'top' | 'ctr' | 'bottom';
+  alt?: string;
+}
+
+/** Either a raster/vector picture or a DrawingML shape. */
+export type DocxDrawing = DocxInlineImage | DocxShape;
+
+/** Text-wrap mode of an anchored (floating) drawing. */
+export type DocxWrap = 'none' | 'square' | 'tight' | 'through' | 'topAndBottom';
+
+/**
+ * A floating (anchored, <wp:anchor>) drawing attached to its containing
+ * paragraph. Positioned absolutely relative to the paragraph's content box; the
+ * `relativeFrom` tokens + offset/align are resolved to CSS at render time
+ * (where the page content width and margins are known). Keeping the anchor on
+ * its paragraph — rather than hoisting it to page coordinates — preserves its
+ * flow position, so e.g. an image anchored in a right-hand table cell renders on
+ * the right.
+ */
+export interface DocxAnchor {
+  drawing: DocxDrawing;
+  wPx: number;
+  hPx: number;
+  /** Drawn behind the text layer (<wp:anchor behindDoc>). */
+  behindDoc: boolean;
+  wrap: DocxWrap;
+  /** <wp:positionH relativeFrom>. */
+  relH: string;
+  /** <wp:positionV relativeFrom>. */
+  relV: string;
+  /** Horizontal offset in px (<wp:posOffset>), if absolute-positioned. */
+  hOffsetPx?: number;
+  /** Horizontal alignment (<wp:align>), if aligned. */
+  hAlign?: 'left' | 'center' | 'right' | 'inside' | 'outside';
+  /** Vertical offset in px. */
+  vOffsetPx?: number;
+  /** Vertical alignment. */
+  vAlign?: 'top' | 'center' | 'bottom' | 'inside' | 'outside';
 }
 
 // ─── Page geometry ────────────────────────────────────────────────────────────
@@ -111,6 +180,8 @@ export interface DocxParagraph {
   contextualSpacing?: boolean;
   /** Paragraph-level borders (from <w:pBdr>). */
   paraBorders?: Partial<{ top: Stroke; bottom: Stroke; left: Stroke; right: Stroke }>;
+  /** Floating (anchored) drawings whose anchor sits in this paragraph. */
+  anchors?: DocxAnchor[];
 }
 
 export interface DocxTable {
@@ -150,22 +221,6 @@ export interface DocxInlineImage {
   alt?: string;
 }
 
-/**
- * A floating (anchored) image positioned absolutely on the page, in page
- * coordinates (px from the page's top-left). Used for header/footer banners and
- * other <wp:anchor> drawings that bleed outside the text margins.
- */
-export interface DocxFloat {
-  part: string;
-  xPx: number;
-  yPx: number;
-  wPx: number;
-  hPx: number;
-  /** Drawn behind the text layer (<wp:anchor behindDoc>). */
-  behindDoc: boolean;
-  alt?: string;
-}
-
 // ─── Section (parse output) ──────────────────────────────────────────────────
 
 /**
@@ -178,10 +233,18 @@ export interface DocxSection {
   size: DocxPageSize;
   margins: DocxPageMargins;
   blocks: DocxBlock[];
+  /** Default header/footer (<w:type="default">), applied to every page. */
   header?: DocxBlock[];
   footer?: DocxBlock[];
-  /** Page-anchored floating images (e.g. header/footer banners), page coords. */
-  floats?: DocxFloat[];
+  /**
+   * First-page header/footer (<w:type="first">), applied to the section's first
+   * page when <w:titlePg> is set. Undefined means the first page has none (a
+   * blank title-page header, which is how Word renders titlePg with no first ref).
+   */
+  firstHeader?: DocxBlock[];
+  firstFooter?: DocxBlock[];
+  /** <w:titlePg>: the first page uses the first-page header/footer set. */
+  titlePg?: boolean;
 }
 
 // ─── Page (paginated output) ───────────────────────────────────────────────────
@@ -198,8 +261,13 @@ export interface DocxPage {
   elements: DocxBlock[];
   header?: DocxBlock[];
   footer?: DocxBlock[];
-  /** Page-anchored floating images drawn absolutely on the sheet. */
-  floats?: DocxFloat[];
+  /**
+   * Effective top/bottom padding in px for the sheet's content box. Grown past
+   * the raw page margins when a tall header/footer would otherwise overlap the
+   * body (Word reserves space for the header/footer). Falls back to margins.
+   */
+  contentTopPx?: number;
+  contentBottomPx?: number;
   /** Resolved text for style references, keyed by style name (lowercased). */
   resolvedStyles?: Record<string, string>;
 }
