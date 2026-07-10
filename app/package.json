@@ -10,7 +10,7 @@
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
-    "@cobuildx.ai/office-viewer": "^0.1.3",
+    "@cobuildx.ai/office-viewer": "^0.1.4",
     "@cyntler/react-doc-viewer": "^1.17.1",
     "chart.js": "^4.5.1",
     "fast-xml-parser": "^5.9.1",
