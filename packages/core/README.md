@@ -5,6 +5,16 @@ Renders `.pptx` and `.docx` files directly in the browser — no server-side con
 - **Framework-agnostic core** at the package root — usable from plain JS, Vue, Svelte, etc.
 - **React bindings** at `@cobuildx.ai/office-viewer/react` — components and hooks. React is an optional peer dependency: if you never import the `/react` entry, your bundle never sees React.
 
+## 🚀 Updates
+
+We ship updates **every week** — rendering fidelity fixes, new features, and broader format coverage. Don't miss out: check back regularly and keep your dependency up to date.
+
+```
+npm update @cobuildx.ai/office-viewer
+```
+
+See the [latest version on npm](https://www.npmjs.com/package/@cobuildx.ai/office-viewer) for what's new.
+
 ## Install
 
 ```
