@@ -16,6 +16,7 @@ import type {
   DocxAnchor,
   DocxWrap,
   DocxGeom,
+  DocxCrop,
 } from '../model.js';
 import type { ParseContext } from '../document/context.js';
 
@@ -96,10 +97,29 @@ function payload(container: XmlNode, ctx: ParseContext): DocxDrawing | undefined
   const rel = ctx.rel(blipEmbed(container));
   if (rel) {
     const img: DocxInlineImage = { kind: 'image', part: rel.target, widthPx: wPx, heightPx: hPx };
+    const crop = cropOf(path(container, 'graphic/graphicData/pic/blipFill'));
+    if (crop) img.crop = crop;
     if (alt) img.alt = alt;
     return img;
   }
   return undefined;
+}
+
+/**
+ * Parse an <a:srcRect> crop (child of a blipFill) into fractional insets. Its
+ * l/t/r/b are in thousandths of a percent (60000 = 60%). Returns undefined when
+ * absent or all-zero (no crop).
+ */
+function cropOf(blipFill: XmlNode | undefined): DocxCrop | undefined {
+  const sr = child(blipFill, 'srcRect');
+  if (!sr) return undefined;
+  const f = (name: string) => (attrNum(sr, name) ?? 0) / 100000;
+  const l = f('l');
+  const t = f('t');
+  const r = f('r');
+  const b = f('b');
+  if (!l && !t && !r && !b) return undefined;
+  return { l, t, r, b };
 }
 
 const GEOM_MAP: Record<string, DocxGeom> = {
@@ -123,6 +143,7 @@ function shapeFrom(
   const geom: DocxGeom = prst ? (GEOM_MAP[prst] ?? 'other') : 'rect';
 
   const fillHex = solidHex(child(spPr, 'solidFill'));
+  const fillImage = pictureFill(child(spPr, 'blipFill'), wPx, hPx, ctx);
 
   const ln = child(spPr, 'ln');
   const lineHex = solidHex(child(ln, 'solidFill'));
@@ -137,11 +158,32 @@ function shapeFrom(
 
   const shape: DocxShape = { kind: 'shape', geom, widthPx: wPx, heightPx: hPx, content };
   if (fillHex) shape.fillHex = fillHex;
+  if (fillImage) shape.fillImage = fillImage;
   if (lineHex) shape.lineHex = lineHex;
   if (lnW !== undefined) shape.lineWidthPx = emuToPx(lnW);
   if (vAnchor) shape.vAnchor = vAnchor;
   if (alt) shape.alt = alt;
   return shape;
+}
+
+/**
+ * Resolve an <a:blipFill> used as a shape's fill (a picture-filled banner/box)
+ * to an image sized to the shape's extent, honoring any <a:srcRect> crop.
+ */
+function pictureFill(
+  blipFill: XmlNode | undefined,
+  wPx: number,
+  hPx: number,
+  ctx: ParseContext,
+): DocxInlineImage | undefined {
+  if (!blipFill) return undefined;
+  const blip = child(blipFill, 'blip');
+  const rel = ctx.rel(attr(blip, 'embed') ?? attr(blip, 'link'));
+  if (!rel) return undefined;
+  const img: DocxInlineImage = { kind: 'image', part: rel.target, widthPx: wPx, heightPx: hPx };
+  const crop = cropOf(blipFill);
+  if (crop) img.crop = crop;
+  return img;
 }
 
 /** Resolve an <a:solidFill> to a hex string (srgbClr only; scheme colors skipped). */
@@ -172,6 +214,9 @@ function fromAnchor(anchor: XmlNode, ctx: ParseContext): DocxAnchor | undefined 
     relH: attr(posH, 'relativeFrom') ?? 'column',
     relV: attr(posV, 'relativeFrom') ?? 'paragraph',
   };
+
+  const zOrder = attrNum(anchor, 'relativeHeight');
+  if (zOrder !== undefined) a.zOrder = zOrder;
 
   const hOff = numText(child(posH, 'posOffset'));
   if (hOff !== undefined) a.hOffsetPx = emuToPx(hOff);

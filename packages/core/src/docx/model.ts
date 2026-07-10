@@ -75,6 +75,8 @@ export interface DocxShape {
   heightPx: number;
   /** Solid fill hex (no leading #). */
   fillHex?: string;
+  /** Picture fill (<a:blipFill> in the shape's spPr), drawn behind the text. */
+  fillImage?: DocxInlineImage;
   /** Outline color hex (no leading #). */
   lineHex?: string;
   lineWidthPx?: number;
@@ -106,6 +108,13 @@ export interface DocxAnchor {
   hPx: number;
   /** Drawn behind the text layer (<wp:anchor behindDoc>). */
   behindDoc: boolean;
+  /**
+   * Paint order among floating drawings (<wp:anchor relativeHeight>): a higher
+   * value sits in front. Preserves Word's z-order so, e.g., WordArt text stays
+   * on top of a picture-filled banner behind it. Undefined falls back to a
+   * fixed layer.
+   */
+  zOrder?: number;
   wrap: DocxWrap;
   /** <wp:positionH relativeFrom>. */
   relH: string;
@@ -212,12 +221,26 @@ export interface DocxTableCell {
   cellPaddingPx?: { top: number; right: number; bottom: number; left: number };
 }
 
+/**
+ * Fractional crop insets (0–1) from each edge of the source image, from
+ * <a:srcRect>. The visible region is the sub-rectangle that remains after
+ * trimming; it is what gets scaled into the drawing's extent box.
+ */
+export interface DocxCrop {
+  l: number;
+  t: number;
+  r: number;
+  b: number;
+}
+
 export interface DocxInlineImage {
   kind: 'image';
   /** Resolved media part path inside the OPC package. */
   part: string;
   widthPx: number;
   heightPx: number;
+  /** Crop rectangle (<a:srcRect>); the extent box shows only this sub-region. */
+  crop?: DocxCrop;
   alt?: string;
 }
 

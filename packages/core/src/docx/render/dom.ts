@@ -426,8 +426,9 @@ function renderAnchor(anchor: DocxAnchor, deps: RenderDeps): HTMLElement {
   s.maxWidth = 'none';
   s.left = anchorLeft(anchor);
   s.top = anchorTop(anchor);
-  // behindDoc drawings sit under the text (negative z); others float above it.
-  s.zIndex = anchor.behindDoc ? '-1' : '1';
+  // behindDoc drawings sit under the text (negative z); others float above it,
+  // ordered among themselves by the anchor's relativeHeight (Word's z-order).
+  s.zIndex = anchor.behindDoc ? '-1' : String(anchor.zOrder ?? 1);
   return el;
 }
 
@@ -479,7 +480,9 @@ function renderSheetAnchor(anchor: DocxAnchor, deps: RenderDeps, page: DocxPage)
 
   s.left = px(left);
   s.top = px(top);
-  s.zIndex = anchor.behindDoc ? '-1' : '5';
+  // Preserve Word's z-order (relativeHeight) so page-framed banners and
+  // flow-framed WordArt/text stack correctly regardless of render path.
+  s.zIndex = anchor.behindDoc ? '-1' : String(anchor.zOrder ?? 5);
   return el;
 }
 
@@ -516,6 +519,38 @@ function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {
     ph.style.cssText = 'color:#999;font-style:italic;padding:4px 0;display:inline-block;';
     return ph;
   }
+  // Cropped picture (<a:srcRect>): the extent box shows only the visible
+  // sub-rectangle. Clip to the box and oversize/offset the full image so that
+  // sub-rectangle fills it — CSS object-fit can't express an arbitrary crop.
+  // Mirrors the PPTX picture renderer (pptx/pictures/render.ts): percentages
+  // relative to the box, with a divide-by-zero clamp.
+  if (img.crop && img.widthPx && img.heightPx) {
+    const { l, t, r, b } = img.crop;
+    const visW = Math.max(0.001, 1 - l - r);
+    const visH = Math.max(0.001, 1 - t - b);
+    const box = document.createElement('div');
+    const bs = box.style;
+    bs.position = 'relative';
+    bs.overflow = 'hidden';
+    bs.display = 'inline-block';
+    bs.verticalAlign = 'middle';
+    bs.width = px(img.widthPx);
+    bs.height = px(img.heightPx);
+    bs.maxWidth = '100%';
+    const el = document.createElement('img');
+    el.src = url;
+    el.style.position = 'absolute';
+    el.style.display = 'block';
+    el.style.width = `${100 / visW}%`;
+    el.style.height = `${100 / visH}%`;
+    el.style.left = `${(-l / visW) * 100}%`;
+    el.style.top = `${(-t / visH) * 100}%`;
+    el.style.maxWidth = 'none';
+    if (img.alt) el.alt = img.alt;
+    box.appendChild(el);
+    return box;
+  }
+
   const el = document.createElement('img');
   el.src = url;
   if (img.widthPx) el.style.width = px(img.widthPx);
@@ -531,6 +566,7 @@ function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {
 function renderShape(shape: DocxShape, deps: RenderDeps): HTMLElement {
   const el = document.createElement('div');
   const s = el.style;
+  s.position = 'relative';
   s.display = 'inline-block';
   s.verticalAlign = 'middle';
   s.boxSizing = 'border-box';
@@ -559,9 +595,26 @@ function renderShape(shape: DocxShape, deps: RenderDeps): HTMLElement {
   s.display = 'inline-flex';
   s.flexDirection = 'column';
   s.justifyContent = shape.vAnchor === 'top' ? 'flex-start' : shape.vAnchor === 'bottom' ? 'flex-end' : 'center';
+
+  // Picture fill (<a:blipFill>): drawn as a clipped layer filling the box,
+  // beneath the text content. The shape clips it to its rounded/elliptical edge.
+  if (shape.fillImage) {
+    s.overflow = 'hidden';
+    const bg = renderImage(shape.fillImage, deps);
+    const bgs = bg.style;
+    bgs.position = 'absolute';
+    bgs.left = '0';
+    bgs.top = '0';
+    bgs.maxWidth = 'none';
+    bgs.zIndex = '0';
+    el.appendChild(bg);
+  }
+
   const inner = document.createElement('div');
   inner.style.width = '100%';
   inner.style.padding = '0 0.1in';
+  inner.style.position = 'relative';
+  inner.style.zIndex = '1';
   for (const block of shape.content) inner.appendChild(renderBlock(block, deps));
   el.appendChild(inner);
   return el;
