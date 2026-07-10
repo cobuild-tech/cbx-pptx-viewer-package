@@ -11,7 +11,9 @@ import type {
   DocxTable,
   DocxTableCell,
   DocxInlineImage,
-  DocxFloat,
+  DocxDrawing,
+  DocxShape,
+  DocxAnchor,
   DocxRun,
   Stroke,
   TextAlign,
@@ -25,6 +27,27 @@ export interface RenderDeps {
 const px = (n: number) => `${n}px`;
 
 const ALIGN: Record<TextAlign, string> = { l: 'left', ctr: 'center', r: 'right', just: 'justify' };
+
+// relativeFrom values framed to the page/margins (not the text flow). An anchor
+// whose VERTICAL reference is one of these is positioned in page coordinates on
+// the sheet — its flow position doesn't determine where it sits (e.g. a
+// full-page-width header banner anchored relativeFrom="page"). Anchors framed to
+// the paragraph/line/column stay attached to their paragraph instead.
+const PAGE_FRAME = new Set([
+  'page',
+  'margin',
+  'topMargin',
+  'bottomMargin',
+  'leftMargin',
+  'rightMargin',
+  'insideMargin',
+  'outsideMargin',
+]);
+
+/** Whether an anchor is positioned against the page frame (vs. the text flow). */
+export function isPageAnchored(a: DocxAnchor): boolean {
+  return PAGE_FRAME.has(a.relV);
+}
 
 /** Base typographic context shared by the sheet and the paginator's measurer. */
 export const SHEET_FONT = {
@@ -45,9 +68,11 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
   s.boxSizing = 'border-box';
   s.width = px(page.size.wPx);
   s.height = px(page.size.hPx);
-  s.paddingTop = px(page.margins.topPx);
+  // Body content box: grown past the raw margins when a tall header/footer
+  // would otherwise overlap it (Word reserves space for the banner/footer).
+  s.paddingTop = px(page.contentTopPx ?? page.margins.topPx);
   s.paddingRight = px(page.margins.rightPx);
-  s.paddingBottom = px(page.margins.bottomPx);
+  s.paddingBottom = px(page.contentBottomPx ?? page.margins.bottomPx);
   s.paddingLeft = px(page.margins.leftPx);
   s.background = '#fff';
   s.color = '#000';
@@ -61,11 +86,14 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
 
   const contentW = page.size.wPx - page.margins.leftPx - page.margins.rightPx;
 
-  // Floating (anchored) images: absolutely positioned in page coordinates,
-  // painted first so behindDoc banners sit under the content.
-  if (page.floats) {
-    for (const f of page.floats) sheet.appendChild(renderFloat(f, deps));
-  }
+  // Page-framed anchors (banners relativeFrom="page"/margins) painted first, in
+  // page coordinates on the sheet, so behindDoc ones sit under the content and
+  // full-bleed banners ignore the text margins.
+  const pageAnchors: DocxAnchor[] = [];
+  collectPageAnchors(page.elements, pageAnchors);
+  if (page.header) collectPageAnchors(page.header, pageAnchors);
+  if (page.footer) collectPageAnchors(page.footer, pageAnchors);
+  for (const a of pageAnchors) sheet.appendChild(renderSheetAnchor(a, deps, page));
 
   if (page.header && page.header.length) {
     sheet.appendChild(marginBand(page.header, deps, contentW, page.margins.leftPx, { top: px(page.margins.headerPx) }, page.index, page.resolvedStyles));
@@ -76,6 +104,17 @@ export function renderPage(page: DocxPage, deps: RenderDeps): HTMLDivElement {
 
   for (const block of page.elements) sheet.appendChild(renderBlock(block, deps, page.index, page.resolvedStyles));
   return sheet;
+}
+
+/** Gather page-framed anchors from a block tree (paragraph anchors + cells). */
+function collectPageAnchors(blocks: DocxBlock[], out: DocxAnchor[]): void {
+  for (const b of blocks) {
+    if (b.kind === 'paragraph') {
+      for (const a of b.anchors ?? []) if (isPageAnchored(a)) out.push(a);
+    } else if (b.kind === 'table') {
+      for (const row of b.rows) for (const cell of row) if (cell) collectPageAnchors(cell.content, out);
+    }
+  }
 }
 
 /** A header/footer positioned inside the page's top/bottom margin band. */
@@ -109,7 +148,7 @@ export function renderBlock(
 ): HTMLElement {
   switch (block.kind) {
     case 'paragraph':
-      return renderParagraph(block, pageIndex, resolvedStyles);
+      return renderParagraph(block, deps, pageIndex, resolvedStyles);
     case 'table':
       return renderTable(block, deps, pageIndex, resolvedStyles);
     case 'image':
@@ -119,8 +158,10 @@ export function renderBlock(
 
 function renderParagraph(
   p: DocxParagraph,
+  deps: RenderDeps,
   pageIndex?: number,
   resolvedStyles?: Record<string, string>,
+  flowAnchorSink?: DocxAnchor[],
 ): HTMLElement {
   const el = document.createElement('div');
   const s = el.style;
@@ -188,12 +229,24 @@ function renderParagraph(
         segEl.style.verticalAlign = 'middle';
         for (const run of segment) {
           const cleanRun = { ...run, tabBefore: false };
-          appendRun(segEl, cleanRun, pageIndex, resolvedStyles);
+          appendRun(segEl, cleanRun, deps, pageIndex, resolvedStyles);
         }
         el.appendChild(segEl);
       }
     } else {
-      for (const run of p.runs) appendRun(el, run, pageIndex, resolvedStyles);
+      for (const run of p.runs) appendRun(el, run, deps, pageIndex, resolvedStyles);
+    }
+  }
+
+  // Flow-framed anchors (relativeFrom column/paragraph) position within this
+  // paragraph. Page-framed anchors are hoisted to the sheet by renderPage. When
+  // a sink is supplied (paragraph inside a table cell), flow anchors are hoisted
+  // to the cell instead, so a vertically-centered cell doesn't drag them down.
+  if (p.anchors) {
+    for (const a of p.anchors) {
+      if (isPageAnchored(a)) continue;
+      if (flowAnchorSink) flowAnchorSink.push(a);
+      else el.appendChild(renderAnchor(a, deps));
     }
   }
   return el;
@@ -202,6 +255,7 @@ function renderParagraph(
 function appendRun(
   parent: HTMLElement,
   run: DocxRun,
+  deps: RenderDeps,
   pageIndex?: number,
   resolvedStyles?: Record<string, string>,
 ): void {
@@ -211,6 +265,12 @@ function appendRun(
     tab.style.display = 'inline-block';
     tab.style.width = '0.5in';
     parent.appendChild(tab);
+  }
+
+  // An inline drawing (picture / shape) occupying this run's slot.
+  if (run.drawing) {
+    parent.appendChild(renderDrawing(run.drawing, deps));
+    return;
   }
 
   let displayText = run.text;
@@ -310,6 +370,9 @@ function renderCell(
   if (cell.colSpan > 1) td.colSpan = cell.colSpan;
   if (cell.rowSpan > 1) td.rowSpan = cell.rowSpan;
   const s = td.style;
+  // Positioning context for the cell's floating anchors (hoisted off their
+  // paragraphs so a centered cell doesn't shift them).
+  s.position = 'relative';
   s.verticalAlign = cell.vAlign ?? 'top';
   if (cell.fillHex) {
     s.background = `#${cell.fillHex}`;
@@ -332,26 +395,117 @@ function renderCell(
     if (cell.borders.b) s.borderBottom = strokeCss(cell.borders.b);
   }
 
-  for (const block of cell.content) td.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
+  const flowAnchors: DocxAnchor[] = [];
+  for (const block of cell.content) {
+    if (block.kind === 'paragraph') {
+      td.appendChild(renderParagraph(block, deps, pageIndex, resolvedStyles, flowAnchors));
+    } else {
+      td.appendChild(renderBlock(block, deps, pageIndex, resolvedStyles));
+    }
+  }
+  // Cell-hoisted floating anchors, positioned against the cell (top-aligned).
+  for (const a of flowAnchors) td.appendChild(renderAnchor(a, deps));
   if (!cell.content.length) td.appendChild(document.createTextNode('​'));
   return td;
 }
 
-function renderFloat(f: DocxFloat, deps: RenderDeps): HTMLElement {
-  const url = deps.imageUrl(f.part);
-  const el = document.createElement(url ? 'img' : 'div') as HTMLElement;
+/**
+ * Render a floating (anchored) drawing absolutely inside its containing,
+ * position:relative paragraph/cell. `left`/`top` resolve the anchor's
+ * relativeFrom + offset/align against the paragraph's content box using CSS
+ * calc — so an image anchored in a right-hand cell lands on the right without
+ * the renderer needing to know the box width.
+ */
+function renderAnchor(anchor: DocxAnchor, deps: RenderDeps): HTMLElement {
+  const el = renderDrawing(anchor.drawing, deps);
   const s = el.style;
   s.position = 'absolute';
-  s.left = px(f.xPx);
-  s.top = px(f.yPx);
-  s.width = px(f.wPx);
-  s.height = px(f.hPx);
-  s.zIndex = f.behindDoc ? '0' : '2';
-  if (url) {
-    (el as HTMLImageElement).src = url;
-    if (f.alt) (el as HTMLImageElement).alt = f.alt;
-  }
+  s.margin = '0';
+  s.width = px(anchor.wPx);
+  s.height = px(anchor.hPx);
+  s.maxWidth = 'none';
+  s.left = anchorLeft(anchor);
+  s.top = anchorTop(anchor);
+  // behindDoc drawings sit under the text (negative z); others float above it.
+  s.zIndex = anchor.behindDoc ? '-1' : '1';
   return el;
+}
+
+/**
+ * Render a page-framed anchor (relativeFrom page/margins) in absolute page
+ * coordinates on the sheet, so full-bleed banners ignore the text margins and
+ * relativeFrom="page" offsets are measured from the page edge.
+ */
+function renderSheetAnchor(anchor: DocxAnchor, deps: RenderDeps, page: DocxPage): HTMLElement {
+  const el = renderDrawing(anchor.drawing, deps);
+  const s = el.style;
+  const { size, margins } = page;
+  const contentW = size.wPx - margins.leftPx - margins.rightPx;
+  s.position = 'absolute';
+  s.margin = '0';
+  s.width = px(anchor.wPx);
+  s.height = px(anchor.hPx);
+  s.maxWidth = 'none';
+
+  // Horizontal.
+  let left: number;
+  if (anchor.hAlign === 'center') {
+    left = anchor.relH === 'page' ? (size.wPx - anchor.wPx) / 2 : margins.leftPx + (contentW - anchor.wPx) / 2;
+  } else if (anchor.hAlign === 'right' || anchor.hAlign === 'outside') {
+    left = anchor.relH === 'page' ? size.wPx - anchor.wPx : size.wPx - margins.rightPx - anchor.wPx;
+  } else if (anchor.hAlign === 'left' || anchor.hAlign === 'inside') {
+    left = anchor.relH === 'page' ? 0 : margins.leftPx;
+  } else {
+    const off = anchor.hOffsetPx ?? 0;
+    if (anchor.relH === 'page') left = off;
+    else if (anchor.relH === 'rightMargin' || anchor.relH === 'outsideMargin') left = size.wPx - margins.rightPx + off;
+    else left = margins.leftPx + off; // leftMargin / margin / column / character
+  }
+
+  // Vertical.
+  let top: number;
+  if (anchor.vAlign === 'center') {
+    top = (size.hPx - anchor.hPx) / 2;
+  } else if (anchor.vAlign === 'bottom') {
+    top = anchor.relV === 'page' ? size.hPx - anchor.hPx : size.hPx - margins.bottomPx - anchor.hPx;
+  } else if (anchor.vAlign === 'top') {
+    top = anchor.relV === 'page' ? 0 : margins.topPx;
+  } else {
+    const off = anchor.vOffsetPx ?? 0;
+    if (anchor.relV === 'page') top = off;
+    else if (anchor.relV === 'bottomMargin' || anchor.relV === 'outsideMargin') top = size.hPx - margins.bottomPx + off;
+    else top = margins.topPx + off; // topMargin / margin / text
+  }
+
+  s.left = px(left);
+  s.top = px(top);
+  s.zIndex = anchor.behindDoc ? '-1' : '5';
+  return el;
+}
+
+/** CSS `left` for an anchor, relative to the containing box's content edge. */
+function anchorLeft(a: DocxAnchor): string {
+  const w = a.wPx;
+  if (a.hAlign === 'center') return `calc((100% - ${w}px) / 2)`;
+  if (a.hAlign === 'right' || a.hAlign === 'outside') return `calc(100% - ${w}px)`;
+  if (a.hAlign === 'left' || a.hAlign === 'inside') return '0px';
+  const off = a.hOffsetPx ?? 0;
+  // rightMargin/outsideMargin measure from the right content edge.
+  if (a.relH === 'rightMargin' || a.relH === 'outsideMargin') return `calc(100% + ${off}px)`;
+  return px(off);
+}
+
+/** CSS `top` for an anchor, relative to the containing paragraph's top. */
+function anchorTop(a: DocxAnchor): string {
+  if (a.vAlign === 'center') return `calc((100% - ${a.hPx}px) / 2)`;
+  if (a.vAlign === 'bottom') return `calc(100% - ${a.hPx}px)`;
+  if (a.vAlign === 'top') return '0px';
+  return px(a.vOffsetPx ?? 0);
+}
+
+/** A drawing (picture or DrawingML shape) as an inline-block element. */
+function renderDrawing(drawing: DocxDrawing, deps: RenderDeps): HTMLElement {
+  return drawing.kind === 'shape' ? renderShape(drawing, deps) : renderImage(drawing, deps);
 }
 
 function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {
@@ -359,7 +513,7 @@ function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {
   if (!url) {
     const ph = document.createElement('div');
     ph.textContent = img.alt ?? '[image]';
-    ph.style.cssText = 'color:#999;font-style:italic;padding:4px 0;';
+    ph.style.cssText = 'color:#999;font-style:italic;padding:4px 0;display:inline-block;';
     return ph;
   }
   const el = document.createElement('img');
@@ -368,7 +522,48 @@ function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {
   if (img.heightPx) el.style.height = px(img.heightPx);
   el.style.maxWidth = '100%';
   if (img.alt) el.alt = img.alt;
-  el.style.display = 'block';
+  el.style.display = 'inline-block';
+  el.style.verticalAlign = 'middle';
+  return el;
+}
+
+/** A DrawingML shape (filled/outlined box, optionally a text box). */
+function renderShape(shape: DocxShape, deps: RenderDeps): HTMLElement {
+  const el = document.createElement('div');
+  const s = el.style;
+  s.display = 'inline-block';
+  s.verticalAlign = 'middle';
+  s.boxSizing = 'border-box';
+  if (shape.widthPx) s.width = px(shape.widthPx);
+  if (shape.heightPx) s.height = px(shape.heightPx);
+  s.maxWidth = '100%';
+
+  if (shape.geom === 'line') {
+    // A connector/line: render as a rule using the outline color.
+    s.borderTop = `${shape.lineWidthPx ? Math.max(1, shape.lineWidthPx) : 1}px solid ${shape.lineHex ? `#${shape.lineHex}` : '#000'}`;
+    s.height = px(shape.heightPx || 0);
+    return el;
+  }
+
+  if (shape.fillHex) {
+    s.background = `#${shape.fillHex}`;
+    // Word's automatic text color flips to white on a dark fill (matches the
+    // table-cell rule); explicit run/paragraph colors still win.
+    if (isDarkFill(shape.fillHex)) s.color = '#fff';
+  }
+  if (shape.lineHex) s.border = `${shape.lineWidthPx ?? 1}px solid #${shape.lineHex}`;
+  if (shape.geom === 'roundRect') s.borderRadius = px(Math.min(shape.widthPx, shape.heightPx) * 0.16);
+  else if (shape.geom === 'ellipse') s.borderRadius = '50%';
+
+  // Vertically anchor the text box content.
+  s.display = 'inline-flex';
+  s.flexDirection = 'column';
+  s.justifyContent = shape.vAnchor === 'top' ? 'flex-start' : shape.vAnchor === 'bottom' ? 'flex-end' : 'center';
+  const inner = document.createElement('div');
+  inner.style.width = '100%';
+  inner.style.padding = '0 0.1in';
+  for (const block of shape.content) inner.appendChild(renderBlock(block, deps));
+  el.appendChild(inner);
   return el;
 }
 
