@@ -59,6 +59,31 @@ export function loadDocx(data: ArrayBuffer | Uint8Array): DocxDocument {
   return DocxDocument.load(data);
 }
 
+// ─── XLSX ────────────────────────────────────────────────────────────────────
+export { Workbook } from './xlsx/workbook/workbook.js';
+export {
+  XlsxViewer,
+  createXlsxViewer,
+  type XlsxViewerOptions,
+} from './xlsx/viewer/viewer.js';
+export { renderXlsxSheet, type RenderXlsxOptions } from './xlsx/render/dom.js';
+export { XlsxRelType } from './xlsx/relTypes.js';
+export type {
+  XlsxSheet,
+  XlsxSheetSummary,
+  XlsxRow,
+  XlsxColumn,
+  XlsxCell,
+  XlsxMergeCell,
+  XlsxCellStyle,
+} from './xlsx/model.js';
+
+import { Workbook } from './xlsx/workbook/workbook.js';
+/** Load a .xlsx from raw bytes into a renderable {@link Workbook}. */
+export function loadXlsx(data: ArrayBuffer | Uint8Array): Workbook {
+  return Workbook.load(data);
+}
+
 // ─── Shared low-level building blocks ────────────────────────────────────────
 export { OpcPackage, type Relationship } from './oxml/package.js';
 export { RelType } from './pptx/relTypes.js';
@@ -80,3 +105,4 @@ export {
   type XmlNode,
 } from './oxml/xml.js';
 export * from './pptx/model.js';
+

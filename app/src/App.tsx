@@ -1,13 +1,13 @@
 import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
-import { PptxViewer, DocxViewer } from '@cobuildx.ai/office-viewer/react';
+import { PptxViewer, DocxViewer, XlsxViewer } from '@cobuildx.ai/office-viewer/react';
 
 const PptxReactViewerWrap = lazy(() => import('./renderers/PptxReactViewerWrap'));
 const PptxViewJsWrap = lazy(() => import('./renderers/PptxViewJsWrap'));
 const CyntlerViewerWrap = lazy(() => import('./renderers/CyntlerViewerWrap'));
 
 type RendererId = 'mine' | 'pptx-react-viewer' | 'pptxviewjs' | 'cyntler';
-type Kind = 'pptx' | 'docx';
+type Kind = 'pptx' | 'docx' | 'xlsx';
 
 const PPTX_RENDERERS: { id: RendererId; label: string }[] = [
   { id: 'mine', label: 'cbx-ppt-viewer' },
@@ -18,11 +18,13 @@ const PPTX_RENDERERS: { id: RendererId; label: string }[] = [
 
 const PPTX_COLOR = '#c43b1c';
 const DOCX_COLOR = '#2b579a';
+const XLSX_COLOR = '#107c41';
 
 function kindOf(name: string): Kind | null {
   const n = name.toLowerCase();
   if (n.endsWith('.pptx')) return 'pptx';
   if (n.endsWith('.docx')) return 'docx';
+  if (n.endsWith('.xlsx')) return 'xlsx';
   return null;
 }
 
@@ -51,7 +53,7 @@ export function App() {
     [accept],
   );
 
-  const accent = kind === 'docx' ? DOCX_COLOR : PPTX_COLOR;
+  const accent = kind === 'docx' ? DOCX_COLOR : kind === 'xlsx' ? XLSX_COLOR : PPTX_COLOR;
 
   return (
     <div style={page}>
@@ -65,7 +67,7 @@ export function App() {
         <div style={divider} />
 
         <button style={{ ...uploadBtn, background: accent }} onClick={() => inputRef.current?.click()}>
-          Upload .pptx / .docx
+          Upload .pptx / .docx / .xlsx
         </button>
 
         {file && kind === 'pptx' && (
@@ -101,7 +103,7 @@ export function App() {
         <input
           ref={inputRef}
           type="file"
-          accept=".pptx,.docx"
+          accept=".pptx,.docx,.xlsx"
           style={{ display: 'none' }}
           onChange={(e) => accept(e.target.files?.[0])}
         />
@@ -113,6 +115,9 @@ export function App() {
           <Suspense fallback={<div style={loadingFallback}>Loading renderer…</div>}>
             {kind === 'docx' && (
               <DocxViewer key={`docx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+            )}
+            {kind === 'xlsx' && (
+              <XlsxViewer key={`xlsx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
             )}
             {kind === 'pptx' && renderer === 'mine' && (
               <PptxViewer key={`pptx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
@@ -134,8 +139,8 @@ export function App() {
               onDrop={onDrop}
               onClick={() => inputRef.current?.click()}
             >
-              <div style={{ fontSize: 40, marginBottom: 12 }}>📄</div>
-              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>Drop a .pptx or .docx file here</div>
+              <div style={{ fontSize: 40, marginBottom: 12 }}>📊</div>
+              <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6 }}>Drop a .pptx, .docx, or .xlsx file here</div>
               <div style={{ color: '#888', fontSize: 13, marginBottom: 16 }}>or click to browse</div>
               <div style={{ ...uploadBtn, background: accent, display: 'inline-block', cursor: 'pointer' }}>
                 Choose a file
