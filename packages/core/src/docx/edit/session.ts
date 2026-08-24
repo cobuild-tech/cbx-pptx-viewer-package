@@ -56,6 +56,12 @@ export class DocxEditSession {
    *
    * Returns the rebuilt sections, or undefined if the paragraph is not editable
    * or has no recorded source (in which case nothing is mutated).
+   *
+   * **Every previously-held model reference goes stale on success.** The
+   * re-parse builds fresh paragraphs and runs and drops the old source map, so
+   * a paragraph captured before the commit will no longer be editable. Callers
+   * must re-read from `doc.sections` (or the returned sections) after each
+   * commit rather than reusing references across one.
    */
   commitParagraph(para: DocxParagraph, edits: DocxParaEdit[]): DocxSection[] | undefined {
     const src = this.doc.sourceOf(para);
