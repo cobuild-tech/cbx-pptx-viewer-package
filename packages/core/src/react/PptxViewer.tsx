@@ -2,7 +2,7 @@ import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 're
 import type { CSSProperties } from 'react';
 import { Viewer, type Deck, type RunFormat, type TextBoxOutline } from '../index.js';
 import { useDeck, type DeckSource } from './useDeck.js';
-import { PptxEditorToolbar } from './PptxEditorToolbar.js';
+import { EditorToolbar } from './EditorToolbar.js';
 
 export interface PptxViewerHandle {
   next(): void;
@@ -137,7 +137,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
   return (
     <div className={className} style={{ display: 'flex', flexDirection: 'column', ...style }}>
       {editable && editorToolbar && deck && (
-        <PptxEditorToolbar
+        <EditorToolbar
           format={format}
           onFormat={(f) => viewerRef.current?.applyFormat(f)}
           onUndo={() => viewerRef.current?.undo()}
@@ -146,6 +146,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
           canRedo={editState.canRedo}
           hasEdits={editState.hasEdits}
           onExport={downloadEdits}
+          exportLabel="Download .pptx"
         />
       )}
       {/* The viewer fits the slide to this area (contain) and centres it. */}

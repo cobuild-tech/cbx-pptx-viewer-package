@@ -18,10 +18,16 @@
  *   viewer.undo(); viewer.redo();
  *   const blob = viewer.exportBlob();     // a valid .pptx with the edits
  *
- * DOCX usage (read-only):
+ * DOCX usage:
  *   const doc = loadDocx(arrayBuffer);
  *   const viewer = createDocxViewer(doc, containerEl, { fit: 'width' });
  *   // when done: viewer.destroy(); doc.dispose();
+ *
+ * DOCX editing (text): pass `editable`, which renders the document as one
+ * continuous column instead of fixed pages (see docx/edit/flow.ts).
+ *   const viewer = createDocxViewer(doc, containerEl, { editable: true });
+ *   viewer.applyFormat({ bold: true });
+ *   const blob = viewer.exportBlob();
  */
 
 // ─── PPTX ────────────────────────────────────────────────────────────────────
@@ -80,6 +86,18 @@ export type {
   DocxPageSize,
   DocxPageMargins,
 } from './docx/model.js';
+
+// DOCX text editing (opt in with `editable` on the viewer).
+export { DocxEditSession, type DocxEditSessionOptions } from './docx/edit/session.js';
+export { DocxEditContext, type DocxEditRenderContext } from './docx/edit/context.js';
+export { reconcileParagraph } from './docx/edit/reconcile.js';
+export {
+  writeParagraphs,
+  type DocxParaEdit,
+  type DocxSegment,
+} from './docx/edit/xmlWrite.js';
+export { renderFlow, FLOW_CLASS } from './docx/edit/flow.js';
+export type { DocxSource } from './docx/document/context.js';
 
 import { DocxDocument } from './docx/document/document.js';
 /** Load a .docx from raw bytes into a renderable {@link DocxDocument}. */
