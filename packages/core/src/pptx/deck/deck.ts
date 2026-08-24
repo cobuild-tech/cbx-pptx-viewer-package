@@ -15,6 +15,16 @@ import { buildSlide } from '../slides/slide.js';
 
 const UNDECODABLE_IMAGE_TYPES = new Set(['image/x-emf', 'image/x-wmf', 'image/emf', 'image/wmf']);
 
+const PPTX_CONTENT_TYPE =
+  'application/vnd.openxmlformats-officedocument.presentationml.presentation';
+
+/** Where a model object was parsed from, for the edit layer. */
+export interface ModelSource {
+  node: XmlNode;
+  /** Package part the node lives in (slide, layout or master). */
+  part: string;
+}
+
 export class Deck {
   readonly size: SlideSize;
   readonly slides: Slide[];
@@ -22,17 +32,29 @@ export class Deck {
   readonly embeddedFonts: EmbeddedFont[];
   private readonly pkg: OpcPackage;
   private readonly urlCache = new Map<string, string>();
+  /**
+   * Model object -> the XML node it was parsed from. Kept off the model itself
+   * so the render-agnostic types stay pure; a WeakMap means entries die with
+   * the slide when it is rebuilt.
+   */
+  private sources = new WeakMap<object, ModelSource>();
+  private readonly slideParts: string[];
+  private readonly defaultTextStyle: XmlNode | undefined;
 
   private constructor(
     pkg: OpcPackage,
     size: SlideSize,
     slides: Slide[],
     embeddedFonts: EmbeddedFont[],
+    slideParts: string[],
+    defaultTextStyle: XmlNode | undefined,
   ) {
     this.pkg = pkg;
     this.size = size;
     this.slides = slides;
     this.embeddedFonts = embeddedFonts;
+    this.slideParts = slideParts;
+    this.defaultTextStyle = defaultTextStyle;
   }
 
   static load(data: ArrayBuffer | Uint8Array): Deck {
@@ -49,11 +71,84 @@ export class Deck {
     // (indents, alignment, sizes) for text in non-placeholder text boxes.
     const defaultTextStyle = child(presXml, 'defaultTextStyle');
 
-    const slides: Slide[] = slideParts.map((part, index) =>
-      buildSlide(pkg, part, index, defaultTextStyle),
-    );
     const embeddedFonts = readEmbeddedFonts(pkg, presPart, presXml);
-    return new Deck(pkg, size, slides, embeddedFonts);
+    const deck = new Deck(pkg, size, [], embeddedFonts, slideParts, defaultTextStyle);
+    slideParts.forEach((part, index) => {
+      deck.slides.push(deck.build(part, index));
+    });
+    return deck;
+  }
+
+  // ─── Editing ───────────────────────────────────────────────────────────────
+
+  /** Build one slide, capturing every text node's XML source as it parses. */
+  private build(part: string, index: number): Slide {
+    return buildSlide(this.pkg, part, index, this.defaultTextStyle, (model, node, srcPart) => {
+      this.sources.set(model, { node, part: srcPart });
+    });
+  }
+
+  /**
+   * The XML node a parsed model object (text body, paragraph or run) came from,
+   * and the part it lives in. Undefined for anything not recorded.
+   */
+  sourceOf(model: object): ModelSource | undefined {
+    return this.sources.get(model);
+  }
+
+  /**
+   * True if `model` belongs to the slide's own part rather than being inherited
+   * from its layout or master. Only slide-owned text is editable — editing
+   * inherited text would change every slide sharing that layout/master.
+   */
+  isEditable(slideIndex: number, model: object): boolean {
+    const slide = this.slides[slideIndex];
+    const src = this.sources.get(model);
+    return !!slide && !!src && src.part === slide.part;
+  }
+
+  /**
+   * Re-parse a slide from its (possibly mutated) XML and replace it in place.
+   * `pkg.getXml` returns the cached node the edit layer mutated, so this picks
+   * up edits without re-reading the zip.
+   */
+  rebuildSlide(index: number): Slide | undefined {
+    const part = this.slideParts[index];
+    if (part === undefined) return undefined;
+    const rebuilt = this.build(part, index);
+    this.slides[index] = rebuilt;
+    return rebuilt;
+  }
+
+  /** Mark a slide's part as mutated so export re-serializes it. */
+  markSlideDirty(index: number): void {
+    const part = this.slideParts[index];
+    if (part !== undefined) this.pkg.markDirty(part);
+  }
+
+  /** True if any part has been edited. */
+  get hasEdits(): boolean {
+    return this.pkg.hasEdits;
+  }
+
+  /** Current XML text of a part — used to snapshot for undo. */
+  snapshotPart(part: string): string | undefined {
+    return this.pkg.serializePart(part);
+  }
+
+  /** Restore a part from a snapshot taken by {@link snapshotPart}. */
+  restorePart(part: string, xml: string): void {
+    this.pkg.setPart(part, xml);
+  }
+
+  /** Re-zip the deck, edits included, as .pptx bytes. */
+  toBytes(): Uint8Array {
+    return this.pkg.toBytes();
+  }
+
+  /** Re-zip the deck, edits included, as a .pptx Blob. */
+  exportBlob(): Blob {
+    return this.pkg.toBlob(PPTX_CONTENT_TYPE);
   }
 
   /** Raw bytes of an embedded font part, for FontFace registration. */

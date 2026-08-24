@@ -6,14 +6,34 @@
  * background — in one place so feature slices (shapes/text/tables/pictures/…)
  * don't duplicate them.
  */
-import type { Fill, Transform } from '../model.js';
+import type { Fill, TextBody, TextRun, Transform } from '../model.js';
 import { colorToCss } from '../color.js';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
 
+/**
+ * What the renderer needs in order to make text editable. Supplied by the edit
+ * layer; absent for a read-only render, which is the default. Declared here so
+ * the render slice owns its own dependency contract rather than importing from
+ * `pptx/edit`.
+ */
+export interface EditRenderContext {
+  /** Stable key identifying a model object for this render pass. */
+  key(model: object): string;
+  /** True if this text body belongs to the slide itself and may be edited. */
+  editable(body: TextBody): boolean;
+  /**
+   * True for runs whose text PowerPoint generates (`<a:fld>` — slide number,
+   * date). They render but must not be typed into.
+   */
+  isField(run: TextRun): boolean;
+}
+
 export interface RenderDeps {
   /** Resolve a media part path to a displayable URL. */
   imageUrl(part: string): string | undefined;
+  /** Present only when the deck is being rendered for editing. */
+  edit?: EditRenderContext;
   /**
    * Cumulative non-uniform scale of all ancestor groups, as a product of each
    * group's (off/chExt) ratio. Geometry is squished by the ancestor CSS scale,

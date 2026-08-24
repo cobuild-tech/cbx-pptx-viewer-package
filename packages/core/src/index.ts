@@ -12,6 +12,12 @@
  *   viewer.next(); viewer.goTo(3);
  *   // when done: viewer.destroy(); deck.dispose();
  *
+ * PPTX editing (text):
+ *   const viewer = createViewer(deck, containerEl, { editable: true });
+ *   viewer.applyFormat({ bold: true });   // formats the current selection
+ *   viewer.undo(); viewer.redo();
+ *   const blob = viewer.exportBlob();     // a valid .pptx with the edits
+ *
  * DOCX usage (read-only):
  *   const doc = loadDocx(arrayBuffer);
  *   const viewer = createDocxViewer(doc, containerEl, { fit: 'width' });
@@ -24,6 +30,21 @@ export { Viewer, createViewer, type ViewerOptions } from './pptx/viewer/viewer.j
 export { renderSlide, type RenderDeps } from './pptx/render/dom.js';
 export { installDeckFonts, type FontInstallation } from './pptx/render/fonts.js';
 export { installWebFonts, collectFontFamilies, type WebFontOptions } from './pptx/render/webfonts.js';
+
+// PPTX text editing (opt in with `editable` on the viewer).
+export { EditSession, type EditSessionOptions } from './pptx/edit/session.js';
+export { EditContext } from './pptx/edit/context.js';
+export { reconcileTextBody, type Resolver } from './pptx/edit/reconcile.js';
+export { writeTextBody, type ParaEdit, type Segment } from './pptx/edit/xmlWrite.js';
+export {
+  applyFormatToSelection,
+  formatAtSelection,
+  bodyElementOf,
+} from './pptx/edit/selection.js';
+export { readFormat, mergeFormat, type RunFormat } from './pptx/edit/format.js';
+export { EDIT_ATTR } from './pptx/text/render.js';
+export type { ModelSource } from './pptx/deck/deck.js';
+export type { EditRenderContext } from './pptx/render/primitives.js';
 
 import { Deck } from './pptx/deck/deck.js';
 /** Load a .pptx from raw bytes into a renderable {@link Deck}. */

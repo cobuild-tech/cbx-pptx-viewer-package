@@ -1,12 +1,21 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Viewer, type Deck } from '../index.js';
+import { Viewer, type Deck, type RunFormat } from '../index.js';
 import { useDeck, type DeckSource } from './useDeck.js';
+import { PptxEditorToolbar } from './PptxEditorToolbar.js';
 
 export interface PptxViewerHandle {
   next(): void;
   prev(): void;
   goTo(index: number): void;
+  /** Format the current selection (editable mode only). */
+  applyFormat(format: RunFormat): void;
+  /** Commit whatever text body is focused, without waiting for blur. */
+  commit(): void;
+  undo(): void;
+  redo(): void;
+  /** Re-zip the deck with all edits applied. */
+  exportBlob(): Blob | undefined;
   deck: Deck | null;
 }
 
@@ -20,10 +29,30 @@ export interface PptxViewerProps {
   onLoad?: (deck: Deck) => void;
   onError?: (error: Error) => void;
   onSlideChange?: (index: number, count: number) => void;
+  /**
+   * Edit the slide's own text in place. Text inherited from the layout or
+   * master stays read-only. Off by default.
+   */
+  editable?: boolean;
+  /** Show the formatting toolbar when `editable`. Default true. */
+  editorToolbar?: boolean;
+  /** Called after each committed edit, undo or redo. */
+  onEdit?: (slideIndex: number) => void;
 }
 
 export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function PptxViewer(
-  { src, toolbar = true, className, style, onLoad, onError, onSlideChange },
+  {
+    src,
+    toolbar = true,
+    className,
+    style,
+    onLoad,
+    onError,
+    onSlideChange,
+    editable = false,
+    editorToolbar = true,
+    onEdit,
+  },
   ref,
 ) {
   const { deck, loading, error } = useDeck(src);
@@ -31,6 +60,9 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
   const viewerRef = useRef<Viewer | null>(null);
   const [index, setIndex] = useState(0);
   const [count, setCount] = useState(0);
+  const [format, setFormat] = useState<RunFormat>({});
+  // The viewer owns undo/redo state; mirror it so the toolbar re-renders.
+  const [editState, setEditState] = useState({ canUndo: false, canRedo: false, hasEdits: false });
 
   useEffect(() => {
     if (error) onError?.(error);
@@ -40,18 +72,28 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
     if (!deck || !stageRef.current) return;
     onLoad?.(deck);
     const viewer = new Viewer(deck, stageRef.current, {
+      editable,
       onChange: (i, c) => {
         setIndex(i);
         setCount(c);
         onSlideChange?.(i, c);
       },
+      onEdit: (i) => {
+        setEditState({
+          canUndo: viewer.canUndo,
+          canRedo: viewer.canRedo,
+          hasEdits: viewer.hasEdits,
+        });
+        onEdit?.(i);
+      },
+      onSelectionChange: setFormat,
     });
     viewerRef.current = viewer;
     return () => {
       viewer.destroy();
       viewerRef.current = null;
     };
-  }, [deck]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deck, editable]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useImperativeHandle(
     ref,
@@ -59,13 +101,41 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       next: () => viewerRef.current?.next(),
       prev: () => viewerRef.current?.prev(),
       goTo: (i: number) => viewerRef.current?.goTo(i),
+      applyFormat: (f: RunFormat) => viewerRef.current?.applyFormat(f),
+      commit: () => viewerRef.current?.commitActive(),
+      undo: () => viewerRef.current?.undo(),
+      redo: () => viewerRef.current?.redo(),
+      exportBlob: () => viewerRef.current?.exportBlob(),
       deck,
     }),
     [deck],
   );
 
+  const downloadEdits = () => {
+    const blob = viewerRef.current?.exportBlob();
+    if (!blob) return;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'edited.pptx';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className={className} style={{ display: 'flex', flexDirection: 'column', ...style }}>
+      {editable && editorToolbar && deck && (
+        <PptxEditorToolbar
+          format={format}
+          onFormat={(f) => viewerRef.current?.applyFormat(f)}
+          onUndo={() => viewerRef.current?.undo()}
+          onRedo={() => viewerRef.current?.redo()}
+          canUndo={editState.canUndo}
+          canRedo={editState.canRedo}
+          hasEdits={editState.hasEdits}
+          onExport={downloadEdits}
+        />
+      )}
       {/* The viewer fits the slide to this area (contain) and centres it. */}
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden', background: '#525659' }}>
         <div ref={stageRef} style={{ width: '100%', height: '100%' }} />

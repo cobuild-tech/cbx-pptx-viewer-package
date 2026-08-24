@@ -44,6 +44,7 @@ export function parseTextBody(
   for (const p of children(txBody, 'p')) {
     body.paragraphs.push(parseParagraph(p, chain, ctx, scope));
   }
+  scope.recordSource?.(body, txBody);
   return body;
 }
 
@@ -74,17 +75,24 @@ function parseParagraph(
     const tag = localName(node.name);
     if (tag === 'r') {
       const run = parseRun(node, level, chain, ctx, scope);
-      if (run.text.length > 0) runs.push(run);
+      if (run.text.length > 0) {
+        runs.push(run);
+        scope.recordSource?.(run, node);
+      }
     } else if (tag === 'br') {
       const rPr = child(node, 'rPr');
       const props = chain.runProps(level, rPr);
-      runs.push({ ...toRun(props), text: '\n' });
+      const run: TextRun = { ...toRun(props), text: '\n' };
+      runs.push(run);
+      scope.recordSource?.(run, node);
     } else if (tag === 'fld') {
       // Fields (slide number, date...). Render the cached text it carries.
       const text = child(node, 't')?.text ?? '';
       if (text) {
-        const run = parseRun(node, level, chain, ctx, scope);
-        runs.push({ ...run, text });
+        const parsed = parseRun(node, level, chain, ctx, scope);
+        const run: TextRun = { ...parsed, text };
+        runs.push(run);
+        scope.recordSource?.(run, node);
       }
     }
   }
@@ -112,6 +120,7 @@ function parseParagraph(
   if (para.lineSpacingPt !== undefined) result.lineSpacingPt = para.lineSpacingPt;
   if (para.spaceBeforePt !== undefined) result.spaceBeforePt = para.spaceBeforePt;
   if (para.spaceAfterPt !== undefined) result.spaceAfterPt = para.spaceAfterPt;
+  scope.recordSource?.(result, p);
   return result;
 }
 

@@ -77,6 +77,8 @@ oxml/             SHARED, format-agnostic — the only layer pptx/ and docx/ may
 
 pptx/             PowerPoint feature slices
   deck/           top-level loader; presentation + slide/layout/master/theme
+  edit/           text editing: source addressing, DOM reconciliation,
+                  XML write-back, formatting, undo/redo
   slides/         slide composition (master -> layout -> slide)
   shapes/         fills, geometry, placeholders, shape props/render
   text/           text bodies, runs, text-style inheritance
@@ -89,19 +91,31 @@ pptx/             PowerPoint feature slices
 docx/             Word feature slices (same shape as pptx)
   document/       top-level loader; body parsing
   paragraphs/ styles/ numbering/ tables/ images/
-  edit/           edit ops, node addressing, version snapshots (DOCX editing)
   model.ts        DOCX page/block/paragraph/table model
   render/         model -> HTML/CSS (dom.ts), pagination-aware
-  viewer/         paginated scroll view + thumbnail strip + inline editing
+  viewer/         paginated scroll view + thumbnail strip
 ```
 
 **Hard rule: `pptx/` and `docx/` must never import from each other.** Anything both need belongs in `oxml/`, not duplicated or cross-imported.
 
 ### Status
 
-- PPTX: read-only viewer. ~106 preset shapes + custom geometry, charts (static SVG snapshot), tables, SmartArt (cached fast path + data-model layout fallback by family), gradients (incl. radial focus/path), autofit text. Effects (shadow/glow/reflection), transitions, and animations are not rendered. `.ppt` (legacy binary) is out of scope.
-- DOCX: read *and* inline WYSIWYG editing (opt-in via `<DocxViewer editable>` / `createDocxViewer`) — undo/redo, run/paragraph formatting, table row insert/delete, pluggable version snapshots (`DocxVersionStore`, with `InMemoryVersionStore` provided), export edits back to a `.docx` `Blob` via `exportBlob()`.
-- The DOCX edit pipeline (mutate model via `applyOp` → re-render → serialize) is the intended template for eventually bringing editing to PPTX.
+- PPTX: renders ~106 preset shapes + custom geometry, charts (static SVG snapshot), tables, SmartArt (cached fast path + data-model layout fallback by family), gradients (incl. radial focus/path), autofit text. Effects (shadow/glow/reflection), transitions, and animations are not rendered. `.ppt` (legacy binary) is out of scope.
+- PPTX **text editing** (opt in via `<PptxViewer editable>` / `createViewer(deck, el, { editable: true })`): inline WYSIWYG editing of the slide's own text bodies — including table cell text — with paragraph split/merge, a formatting toolbar (bold/italic/underline/strike, size, colour, typeface), undo/redo, and export back to a `.pptx` `Blob` via `exportBlob()`. Text inherited from a layout or master is rendered but read-only, since editing it would change every slide that shares it. Shape geometry, images and charts are not editable.
+- DOCX: read-only. (Editing is **not** implemented — the pipeline below is the template for bringing it there.)
+- XLSX: read-only.
+
+### How PPTX editing works
+
+`pptx/edit/` is the reference pattern for adding editing to another format:
+
+1. **Address at parse time.** Model indices do not match XML indices (empty runs are dropped, `<a:br>`/`<a:fld>` become runs), so `ParseScope.recordSource` captures the exact `XmlNode` each text body/paragraph/run came from, into a `WeakMap` on the `Deck`. The model itself stays a pure value tree. Because each of a slide's master/layout/slide scopes carries its own part path, this also tells the editor what is inherited (read-only) versus slide-owned.
+2. **Reconcile, don't intercept.** contentEditable is left alone to do whatever it likes; on blur the DOM subtree is read back into a `ParaEdit[]` (`reconcile.ts`). Typing, Enter, Backspace, paste and formatting therefore share one code path rather than one per interaction.
+3. **Reuse over recreation.** `xmlWrite.ts` splices the *original* `<a:r>` node back in whenever a segment's text and formatting are unchanged, so an edit to one word leaves every other run — and every property the parser never read — byte-identical.
+4. **Snapshot for undo.** `OpcPackage.serializePart` / `setPart` give exact undo without inverse ops.
+5. **Export is non-destructive.** `toBytes()` re-serializes only dirty parts; every other part is emitted from its original bytes unchanged (there is a test asserting this).
+
+Known limitations: `normAutofit` shrink factors are baked in at parse time and are not recomputed after an edit, so text can overflow its box (PowerPoint's "do not autofit" behaviour); `<a:fld>` runs render but are locked, since PowerPoint regenerates their text.
 
 ### Conventions when extending
 

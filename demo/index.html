@@ -13,6 +13,19 @@
         background: #1e1e2e;
         color: #e6e6e6;
       }
+      #editor { padding: 16px 20px; }
+      #editbar {
+        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+        padding: 8px; background: #2a2a3e; border-radius: 8px 8px 0 0;
+      }
+      #editbar button, #editbar select, #editbar input {
+        padding: 4px 9px; border-radius: 6px; border: 1px solid #555;
+        background: #3a3a4e; color: #e6e6e6; cursor: pointer; font: inherit;
+      }
+      #editbar button:disabled { opacity: .4; cursor: default; }
+      #editbar .sep { width: 1px; align-self: stretch; background: #555; margin: 0 3px; }
+      #stage { height: 60vh; background: #525659; border-radius: 0 0 8px 8px; overflow: hidden; }
+      .hint { color: #9a9ab0; font-size: 13px; }
       header {
         padding: 16px 20px;
         border-bottom: 1px solid #333;
@@ -46,6 +59,30 @@
       <input type="file" id="file" accept=".pptx" />
     </header>
     <div id="drop">Drop a <code>.pptx</code> file here, or use the picker above.</div>
+    <div id="editor" hidden>
+      <div id="editbar">
+        <button data-fmt="bold"><b>B</b></button>
+        <button data-fmt="italic"><i>I</i></button>
+        <button data-fmt="underline"><u>U</u></button>
+        <button data-fmt="strike"><s>S</s></button>
+        <select id="size" title="Font size"></select>
+        <input type="color" id="color" title="Text colour" />
+        <span class="sep"></span>
+        <button id="undo" title="Undo">&#8630;</button>
+        <button id="redo" title="Redo">&#8631;</button>
+        <span class="sep"></span>
+        <button id="prev">&lsaquo; Prev</button>
+        <span id="pos">— / —</span>
+        <button id="next">Next &rsaquo;</button>
+        <span class="sep"></span>
+        <button id="download">Download .pptx</button>
+      </div>
+      <div id="stage"></div>
+      <p class="hint">
+        Click any text on the slide and type. Text inherited from the layout or
+        master is read-only. Select text and use the buttons to format it.
+      </p>
+    </div>
     <div id="info"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>

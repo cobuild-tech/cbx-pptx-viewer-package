@@ -11,7 +11,7 @@ import { RelType } from '../relTypes.js';
 import { child, attr, type XmlNode } from '../../oxml/xml.js';
 import type { Fill, Slide } from '../model.js';
 import { parseTheme, type ColorContext, type Theme, findColorEl, resolveColorEl } from '../color.js';
-import type { ParseScope } from '../scope.js';
+import type { ParseScope, SourceSink } from '../scope.js';
 import { parseFill } from '../shapes/fill.js';
 import { indexPlaceholders } from '../shapes/placeholders.js';
 import { buildShapes, type SlideBuildCtx, type SlideScopes, type PartResolver } from '../shapes/shape.js';
@@ -36,6 +36,7 @@ export function buildSlide(
   slidePart: string,
   index: number,
   defaultTextStyle?: XmlNode,
+  sink?: SourceSink,
 ): Slide {
   const slideXml = pkg.getXml(slidePart);
   const layoutPart = pkg.relByType(slidePart, RelType.SlideLayout)?.target;
@@ -53,16 +54,16 @@ export function buildSlide(
   const colorCtx: ColorContext = { theme, clrMap };
 
   const scopes: SlideScopes = {
-    slide: makeScope(pkg, slidePart, colorCtx),
-    layout: makeScope(pkg, layoutPart ?? slidePart, colorCtx),
-    master: makeScope(pkg, masterPart ?? slidePart, colorCtx),
+    slide: makeScope(pkg, slidePart, colorCtx, sink),
+    layout: makeScope(pkg, layoutPart ?? slidePart, colorCtx, sink),
+    master: makeScope(pkg, masterPart ?? slidePart, colorCtx, sink),
   };
 
   const parts: PartResolver = {
     relTargetsByType: (type) => pkg.relsByType(slidePart, type).map((r) => r.target),
     partForRel: (relId) => pkg.resolveRel(slidePart, relId)?.target,
     xml: (part) => pkg.getXml(part),
-    scopeFor: (part) => makeScope(pkg, part, colorCtx),
+    scopeFor: (part) => makeScope(pkg, part, colorCtx, sink),
   };
 
   const ctx: SlideBuildCtx = {
@@ -117,8 +118,13 @@ function readClrMap(masterXml: XmlNode | undefined): Record<string, string> {
   return { ...DEFAULT_CLR_MAP, ...map };
 }
 
-function makeScope(pkg: OpcPackage, partPath: string, colorCtx: ColorContext): ParseScope {
-  return {
+function makeScope(
+  pkg: OpcPackage,
+  partPath: string,
+  colorCtx: ColorContext,
+  sink?: SourceSink,
+): ParseScope {
+  const scope: ParseScope = {
     colorCtx,
     resolveImage: (rId) => pkg.resolveRel(partPath, rId)?.target,
     resolveHyperlink: (rId) => {
@@ -127,6 +133,10 @@ function makeScope(pkg: OpcPackage, partPath: string, colorCtx: ColorContext): P
       return rel.mode === 'External' ? rel.rawTarget : rel.target;
     },
   };
+  // The scope knows its own part, so the sink is handed the part for free —
+  // that is what lets the editor tell slide-owned text from inherited text.
+  if (sink) scope.recordSource = (model, node) => sink(model, node, partPath);
+  return scope;
 }
 
 interface BgSource {
