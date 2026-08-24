@@ -10,6 +10,29 @@ import type { StyleTable } from '../styles/styles.js';
 import type { Numbering } from '../numbering/numbering.js';
 import type { DocxBlock } from '../model.js';
 
+/**
+ * Where a model object came from in the XML.
+ *
+ * A DocxRun records its `<w:t>` node, not its `<w:r>` — one `<w:r>` emits one
+ * run per `<w:t>` child, so the run element alone cannot identify a run. The
+ * owning `<w:r>` is kept alongside because that is where `<w:rPr>` lives.
+ */
+export interface DocxSource {
+  node: XmlNode;
+  /** The `<w:r>` a `<w:t>` belongs to, for rPr cloning. */
+  owner?: XmlNode;
+  /** Package part the node lives in (document, header or footer). */
+  part: string;
+}
+
+/**
+ * Records which XML node a model object was parsed from. The edit layer needs
+ * this because model indices do not match XML indices — `logicalChildren`
+ * flattens `<w:sdt>`/`<w:smartTag>`/`<w:fldSimple>`, and one `<w:r>` can emit
+ * several runs. Capturing at parse time is the only exact mapping.
+ */
+export type DocxSourceSink = (model: object, src: DocxSource) => void;
+
 export interface ParseContext {
   styles: StyleTable;
   numbering: Numbering;
@@ -31,4 +54,10 @@ export interface ParseContext {
   getPartXml(part: string): XmlNode | undefined;
   /** A context whose relationships resolve against a different part. */
   forPart(partPath: string): ParseContext;
+  /**
+   * Edit support: record the XML node a model object came from. The context
+   * knows its own {@link partPath}, so headers/footers are distinguishable from
+   * the main document — which is what makes them read-only in the editor.
+   */
+  recordSource?(model: object, node: XmlNode, owner?: XmlNode): void;
 }
