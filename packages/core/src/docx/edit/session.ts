@@ -10,7 +10,7 @@
  *  - the re-parse rebuilds styles and numbering from scratch, which is what
  *    keeps ordered lists numbered from 1 (see DocxDocument.parse).
  */
-import { History } from '../../pptx/edit/history.js';
+import { History } from '../../oxml/edit/history.js';
 import type { DocxDocument } from '../document/document.js';
 import type { DocxParagraph, DocxSection } from '../model.js';
 import { child, type XmlNode } from '../../oxml/xml.js';

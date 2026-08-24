@@ -7,7 +7,7 @@
  */
 import type { Deck } from '../deck/deck.js';
 import type { Slide, TextBody } from '../model.js';
-import { History } from './history.js';
+import { History } from '../../oxml/edit/history.js';
 import { writeTextBody, type ParaEdit } from './xmlWrite.js';
 
 export interface EditSessionOptions {

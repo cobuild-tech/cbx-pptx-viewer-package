@@ -34,16 +34,22 @@ export { installWebFonts, collectFontFamilies, type WebFontOptions } from './ppt
 // PPTX text editing (opt in with `editable` on the viewer).
 export { EditSession, type EditSessionOptions } from './pptx/edit/session.js';
 export { EditContext } from './pptx/edit/context.js';
-export { reconcileTextBody, type Resolver } from './pptx/edit/reconcile.js';
+export { reconcileTextBody } from './pptx/edit/reconcile.js';
 export { writeTextBody, type ParaEdit, type Segment } from './pptx/edit/xmlWrite.js';
+export { readFormat } from './pptx/edit/format.js';
+export { EDIT_ATTR } from './oxml/edit/attrs.js';
+
+// Format-agnostic editing primitives, shared by every format slice.
 export {
   applyFormatToSelection,
   formatAtSelection,
   bodyElementOf,
-} from './pptx/edit/selection.js';
-export { readFormat, mergeFormat, type RunFormat } from './pptx/edit/format.js';
-export { installEditStyles, type TextBoxOutline } from './pptx/edit/styles.js';
-export { EDIT_ATTR } from './pptx/text/render.js';
+  type Resolver,
+  type ReadRunFormat,
+} from './oxml/edit/selection.js';
+export { mergeFormat, isEmptyFormat, type RunFormat } from './oxml/edit/format.js';
+export { installEditStyles, type TextBoxOutline } from './oxml/edit/styles.js';
+export { History, type Snapshot } from './oxml/edit/history.js';
 export type { ModelSource } from './pptx/deck/deck.js';
 export type { EditRenderContext } from './pptx/render/primitives.js';
 

@@ -17,7 +17,8 @@ import {
   type XmlNode,
 } from '../../oxml/xml.js';
 import type { Paragraph, TextRun } from '../model.js';
-import { applyFormat, isEmptyFormat, stripHyperlink, type RunFormat } from './format.js';
+import { applyFormat, stripHyperlink } from './format.js';
+import { isEmptyFormat, type RunFormat } from '../../oxml/edit/format.js';
 
 /** One contiguous stretch of text that shares formatting. */
 export interface Segment {

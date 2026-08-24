@@ -9,36 +9,29 @@
  * child order that Word enforces.
  */
 import { child, createElement, setAttr, localName, type XmlNode } from '../../oxml/xml.js';
+import { isEmptyFormat, mergeFormat, type RunFormat } from '../../oxml/edit/format.js';
+import type { DocxRun } from '../model.js';
 
-/** A formatting override the toolbar can apply to a stretch of text. */
-export interface DocxRunFormat {
-  bold?: boolean;
-  italic?: boolean;
-  underline?: boolean;
-  strike?: boolean;
-  /** Font size in points (stored as half-points). */
-  sizePt?: number;
-  /** sRGB hex, no leading '#'. */
-  colorHex?: string;
-  /** Typeface name. */
-  font?: string;
-}
+export { isEmptyFormat, mergeFormat, type RunFormat };
 
-export function isEmptyFormat(f: DocxRunFormat | undefined): boolean {
-  return !f || Object.values(f).every((v) => v === undefined);
-}
+/** Word's run format is the shared one — only the encoding below differs. */
+export type DocxRunFormat = RunFormat;
 
-/** Merge `over` on top of `base` (later wins; undefined does not clear). */
-export function mergeFormat(
-  base: DocxRunFormat | undefined,
-  over: DocxRunFormat | undefined,
-): DocxRunFormat {
-  const out: DocxRunFormat = { ...base };
-  if (over) {
-    for (const [k, v] of Object.entries(over)) {
-      if (v !== undefined) (out as Record<string, unknown>)[k] = v;
-    }
-  }
+/**
+ * The formatting of a *resolved* model run, for the toolbar's active state.
+ * Reads the model rather than `<w:rPr>` so everything inherited through the
+ * style cascade (docDefaults -> style -> direct) is reflected too.
+ */
+export function readRunFormat(run: object): RunFormat {
+  const r = run as DocxRun;
+  const out: RunFormat = {};
+  if (r.bold !== undefined) out.bold = r.bold;
+  if (r.italic !== undefined) out.italic = r.italic;
+  if (r.underline !== undefined) out.underline = r.underline;
+  if (r.strike !== undefined) out.strike = r.strike;
+  if (r.sizePt !== undefined) out.sizePt = r.sizePt;
+  if (r.colorHex) out.colorHex = r.colorHex;
+  if (r.font) out.font = r.font;
   return out;
 }
 

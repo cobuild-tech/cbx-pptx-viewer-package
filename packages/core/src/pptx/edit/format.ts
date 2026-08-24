@@ -1,41 +1,15 @@
 /**
- * Run formatting: the toolbar's view of a run, and how it maps to `<a:rPr>`.
+ * DrawingML encoding of a {@link RunFormat}: how a format maps to `<a:rPr>`.
  *
- * Kept separate from the DOM so both the toolbar (which reads the current
- * selection's formatting) and the XML writer (which applies it) share one
- * definition of what a "format" is.
+ * The format *value* is shared with the other formats (oxml/edit/format.ts);
+ * only the encoding is PowerPoint-specific — attributes on `<a:rPr>` plus a
+ * `<a:solidFill>` child, in schema order.
  */
 import { child, createElement, setAttr, type XmlNode } from '../../oxml/xml.js';
+import { isEmptyFormat, mergeFormat, type RunFormat } from '../../oxml/edit/format.js';
+import type { TextRun } from '../model.js';
 
-/** A formatting override the toolbar can apply to a stretch of text. */
-export interface RunFormat {
-  bold?: boolean;
-  italic?: boolean;
-  underline?: boolean;
-  strike?: boolean;
-  /** Font size in points. */
-  sizePt?: number;
-  /** sRGB hex, no leading '#'. */
-  colorHex?: string;
-  /** Typeface name. */
-  font?: string;
-}
-
-/** True if the format carries no actual overrides. */
-export function isEmptyFormat(f: RunFormat | undefined): boolean {
-  return !f || Object.values(f).every((v) => v === undefined);
-}
-
-/** Merge `over` on top of `base` (later wins, undefined does not clear). */
-export function mergeFormat(base: RunFormat | undefined, over: RunFormat | undefined): RunFormat {
-  const out: RunFormat = { ...base };
-  if (over) {
-    for (const [k, v] of Object.entries(over)) {
-      if (v !== undefined) (out as Record<string, unknown>)[k] = v;
-    }
-  }
-  return out;
-}
+export { isEmptyFormat, mergeFormat, type RunFormat };
 
 /**
  * The DrawingML child-element order for `<a:rPr>` (CT_TextCharacterProperties).
@@ -152,6 +126,24 @@ export function readFormat(rPr: XmlNode | undefined): RunFormat {
   const latin = child(rPr, 'latin');
   const typeface = latin?.attrs['typeface'];
   if (typeface) out.font = typeface;
+  return out;
+}
+
+/**
+ * The formatting of a *resolved* model run, for the toolbar's active state.
+ * Reads the model rather than `<a:rPr>` so properties inherited from the
+ * layout, master and theme are reflected too.
+ */
+export function readRunFormat(run: object): RunFormat {
+  const r = run as TextRun;
+  const out: RunFormat = {};
+  if (r.bold !== undefined) out.bold = r.bold;
+  if (r.italic !== undefined) out.italic = r.italic;
+  if (r.underline !== undefined) out.underline = r.underline;
+  if (r.strike !== undefined) out.strike = r.strike;
+  if (r.sizePt !== undefined) out.sizePt = r.sizePt;
+  if (r.color) out.colorHex = r.color.hex;
+  if (r.font) out.font = r.font;
   return out;
 }
 

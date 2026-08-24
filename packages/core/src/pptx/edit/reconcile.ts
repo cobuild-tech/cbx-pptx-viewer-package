@@ -12,15 +12,15 @@
  * still inherits the properties of the run it visually belongs to.
  */
 import type { Paragraph, TextRun } from '../model.js';
-import { EDIT_ATTR } from '../text/render.js';
-import { mergeFormat, type RunFormat } from './format.js';
+import { EDIT_ATTR } from '../../oxml/edit/attrs.js';
+import { mergeFormat, type RunFormat } from '../../oxml/edit/format.js';
 import type { ParaEdit, Segment } from './xmlWrite.js';
 
 /** The zero-width space the renderer uses to give empty paragraphs height. */
 const ZWSP = '​';
 
-/** Resolves a key stamped on the DOM back to the model object it names. */
-export type Resolver = (key: string | null | undefined) => object | undefined;
+export type { Resolver } from '../../oxml/edit/selection.js';
+import type { Resolver } from '../../oxml/edit/selection.js';
 
 function isElement(n: Node): n is Element {
   return n.nodeType === 1;
