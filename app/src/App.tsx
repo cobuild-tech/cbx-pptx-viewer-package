@@ -32,6 +32,7 @@ export function App() {
   const [file, setFile] = useState<File | null>(null);
   const [kind, setKind] = useState<Kind>('pptx');
   const [renderer, setRenderer] = useState<RendererId>('mine');
+  const [editable, setEditable] = useState(false);
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -42,6 +43,8 @@ export function App() {
     setFile(f);
     setKind(k);
     setRenderer('mine');
+    // A new file starts read-only, so nobody edits by accident on open.
+    setEditable(false);
   }, []);
 
   const onDrop = useCallback(
@@ -87,6 +90,18 @@ export function App() {
           </label>
         )}
 
+        {file && kind === 'pptx' && renderer === 'mine' && (
+          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
+            <input
+              type="checkbox"
+              checked={editable}
+              onChange={(e) => setEditable(e.target.checked)}
+              style={{ accentColor: accent }}
+            />
+            <span style={{ color: editable ? '#eee' : '#aaa' }}>Edit text</span>
+          </label>
+        )}
+
         {file && (
           <div style={fileChip}>
             <span style={{ ...chipTag, background: accent }}>{kind.toUpperCase()}</span>
@@ -120,7 +135,12 @@ export function App() {
               <XlsxViewer key={`xlsx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
             )}
             {kind === 'pptx' && renderer === 'mine' && (
-              <PptxViewer key={`pptx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+              <PptxViewer
+                key={`pptx:${file.name}:${editable ? 'edit' : 'read'}`}
+                src={file}
+                editable={editable}
+                style={{ flex: 1, minHeight: 0 }}
+              />
             )}
             {kind === 'pptx' && renderer === 'pptx-react-viewer' && <PptxReactViewerWrap key={`prv:${file.name}`} file={file} />}
             {kind === 'pptx' && renderer === 'pptxviewjs' && <PptxViewJsWrap key={`pvjs:${file.name}`} file={file} />}
