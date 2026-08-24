@@ -1,5 +1,6 @@
 /**
- * Selection formatting.
+ * Selection formatting — format-agnostic.
+ *
  *
  * `document.execCommand` is deprecated and each browser invents its own markup
  * for it (`<b>`, `<font>`, inline styles), which reconciliation would then have
@@ -8,11 +9,15 @@
  * so the change is visible immediately. Reconciliation reads the data back —
  * the CSS is only ever presentation.
  */
-import { ptToPx } from '../../oxml/units.js';
-import type { TextRun } from '../model.js';
-import { EDIT_ATTR } from '../text/render.js';
+import { ptToPx } from '../units.js';
+import { EDIT_ATTR } from './attrs.js';
 import { mergeFormat, type RunFormat } from './format.js';
-import type { Resolver } from './reconcile.js';
+
+/** Resolves a key stamped on the DOM back to the model object it names. */
+export type Resolver = (key: string | null | undefined) => object | undefined;
+
+/** Reads the resolved formatting off a format's own run model. */
+export type ReadRunFormat = (run: object) => RunFormat;
 
 /** Paint a format onto an element so the user sees it before the commit. */
 function paint(el: HTMLElement, f: RunFormat): void {
@@ -71,11 +76,15 @@ export function applyFormatToSelection(root: Element, format: RunFormat): HTMLEl
 }
 
 /**
- * The formatting in effect at the caret, for the toolbar's active state. Read
- * from the resolved model run (not its `<a:rPr>`) so inherited properties —
- * from the layout, master and theme — are reflected too.
+ * The formatting in effect at the caret, for the toolbar's active state.
+ * `readRunFormat` reads the *resolved* model run rather than its raw XML
+ * properties, so everything the run inherits is reflected too.
  */
-export function formatAtSelection(root: Element, resolve: Resolver): RunFormat {
+export function formatAtSelection(
+  root: Element,
+  resolve: Resolver,
+  readRunFormat: ReadRunFormat,
+): RunFormat {
   const sel = root.ownerDocument?.defaultView?.getSelection();
   if (!sel || sel.rangeCount === 0) return {};
 
@@ -96,18 +105,8 @@ export function formatAtSelection(root: Element, resolve: Resolver): RunFormat {
       }
       const runKey = el.getAttribute(EDIT_ATTR.run);
       if (runKey) {
-        const run = resolve(runKey) as TextRun | undefined;
-        if (run) {
-          pending = {
-            ...(run.bold !== undefined ? { bold: run.bold } : {}),
-            ...(run.italic !== undefined ? { italic: run.italic } : {}),
-            ...(run.underline !== undefined ? { underline: run.underline } : {}),
-            ...(run.strike !== undefined ? { strike: run.strike } : {}),
-            ...(run.sizePt !== undefined ? { sizePt: run.sizePt } : {}),
-            ...(run.color ? { colorHex: run.color.hex } : {}),
-            ...(run.font ? { font: run.font } : {}),
-          };
-        }
+        const run = resolve(runKey);
+        if (run) pending = readRunFormat(run);
         break;
       }
     }

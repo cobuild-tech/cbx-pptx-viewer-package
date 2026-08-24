@@ -74,6 +74,9 @@ oxml/             SHARED, format-agnostic — the only layer pptx/ and docx/ may
   package.ts      OPC: unzip, content types, relationship resolution
   xml.ts          order-preserving, namespace-aware XML tree + helpers
   units.ts        EMU / point / twip -> CSS pixel conversions
+  edit/           editing primitives every format shares: attrs.ts (DOM marker
+                  names), format.ts (the RunFormat value), history.ts (snapshot
+                  undo), selection.ts, styles.ts (editable-region outlines)
 
 pptx/             PowerPoint feature slices
   deck/           top-level loader; presentation + slide/layout/master/theme
@@ -90,6 +93,8 @@ pptx/             PowerPoint feature slices
 
 docx/             Word feature slices (same shape as pptx)
   document/       top-level loader; body parsing
+  edit/           text editing: source addressing, DOM reconciliation, XML
+                  write-back, continuous-flow renderer
   paragraphs/ styles/ numbering/ tables/ images/
   model.ts        DOCX page/block/paragraph/table model
   render/         model -> HTML/CSS (dom.ts), pagination-aware
@@ -102,20 +107,31 @@ docx/             Word feature slices (same shape as pptx)
 
 - PPTX: renders ~106 preset shapes + custom geometry, charts (static SVG snapshot), tables, SmartArt (cached fast path + data-model layout fallback by family), gradients (incl. radial focus/path), autofit text. Effects (shadow/glow/reflection), transitions, and animations are not rendered. `.ppt` (legacy binary) is out of scope.
 - PPTX **text editing** (opt in via `<PptxViewer editable>` / `createViewer(deck, el, { editable: true })`): inline WYSIWYG editing of the slide's own text bodies — including table cell text — with paragraph split/merge, a formatting toolbar (bold/italic/underline/strike, size, colour, typeface), undo/redo, and export back to a `.pptx` `Blob` via `exportBlob()`. Text inherited from a layout or master is rendered but read-only, since editing it would change every slide that shares it. Shape geometry, images and charts are not editable.
-- DOCX: read-only. (Editing is **not** implemented — the pipeline below is the template for bringing it there.)
+- DOCX **text editing** (opt in via `<DocxViewer editable>` / `createDocxViewer(doc, el, { editable: true })`): inline WYSIWYG editing of body text including table cell text, paragraph split/merge, the same formatting toolbar, undo/redo, and export to a `.docx` `Blob`. Header and footer text renders but is read-only, as are generated list markers and field results. **Edit mode renders the document as one continuous column instead of fixed pages** — see below.
 - XLSX: read-only.
 
-### How PPTX editing works
+### How editing works
 
-`pptx/edit/` is the reference pattern for adding editing to another format:
+`pptx/edit/` and `docx/edit/` share one architecture; the format-agnostic parts live in `oxml/edit/`. Use them as the reference pattern for XLSX:
 
-1. **Address at parse time.** Model indices do not match XML indices (empty runs are dropped, `<a:br>`/`<a:fld>` become runs), so `ParseScope.recordSource` captures the exact `XmlNode` each text body/paragraph/run came from, into a `WeakMap` on the `Deck`. The model itself stays a pure value tree. Because each of a slide's master/layout/slide scopes carries its own part path, this also tells the editor what is inherited (read-only) versus slide-owned.
-2. **Reconcile, don't intercept.** contentEditable is left alone to do whatever it likes; on blur the DOM subtree is read back into a `ParaEdit[]` (`reconcile.ts`). Typing, Enter, Backspace, paste and formatting therefore share one code path rather than one per interaction.
-3. **Reuse over recreation.** `xmlWrite.ts` splices the *original* `<a:r>` node back in whenever a segment's text and formatting are unchanged, so an edit to one word leaves every other run — and every property the parser never read — byte-identical.
-4. **Snapshot for undo.** `OpcPackage.serializePart` / `setPart` give exact undo without inverse ops.
+1. **Address at parse time.** Model indices do not match XML indices (PPTX drops empty runs and turns `<a:br>`/`<a:fld>` into runs; DOCX's `logicalChildren` flattens `<w:sdt>`/`<w:smartTag>`/`<w:fldSimple>`), so `ParseScope.recordSource` / `ParseContext.recordSource` captures the exact `XmlNode` each object came from, into a `WeakMap` on the `Deck`/`DocxDocument`. The model itself stays a pure value tree. Because each parse scope carries its own part path, this also identifies what is read-only for free — layout/master text in PPTX, header/footer text in DOCX.
+2. **Reconcile, don't intercept.** contentEditable is left alone to do whatever it likes; on blur the DOM subtree is read back into a `ParaEdit[]` (`reconcile.ts`). Typing, Enter, Backspace, paste and formatting therefore share one code path rather than one per interaction. The editable unit is a text body in PPTX and a single paragraph in DOCX, because a DOCX body is one long flow with no txBody-sized container.
+3. **Reuse over recreation.** `xmlWrite.ts` splices the *original* run node back in whenever a segment's text and formatting are unchanged, so an edit to one word leaves every other run — and every property the parser never read — byte-identical.
+4. **Snapshot for undo.** `OpcPackage.serializePart` / `setPart` give exact undo without inverse ops (`oxml/edit/history.ts`).
 5. **Export is non-destructive.** `toBytes()` re-serializes only dirty parts; every other part is emitted from its original bytes unchanged (there is a test asserting this).
 
-Known limitations: `normAutofit` shrink factors are baked in at parse time and are not recomputed after an edit, so text can overflow its box (PowerPoint's "do not autofit" behaviour); `<a:fld>` runs render but are locked, since PowerPoint regenerates their text.
+**Two format-specific wrinkles worth knowing before you touch either slice:**
+
+- **DOCX runs are many-to-one.** One `<w:r>` emits one `DocxRun` per `<w:t>` child, so a run is addressed by its `<w:t>`, with the owning `<w:r>` carried alongside for `<w:rPr>`. In PPTX an `<a:r>` is one run.
+- **DOCX edits in continuous flow.** The paginator (`docx/viewer/paginate.ts`) splits a paragraph mid-text across a page boundary into *cloned* objects on two page sheets — a contentEditable region cannot span that, and the clones have no source identity. So edit mode renders one continuous column (`docx/edit/flow.ts`) and re-paginates on exit. This costs no fidelity: **pagination is not stored in a `.docx`** (Word reflows on open), so our pages are purely a display concern.
+
+**Traps that have already bitten:**
+
+- `Numbering` (`docx/numbering/numbering.ts`) holds live counters that `marker()` advances while walking the body. `DocxDocument.rebuild()` must construct a **fresh** `Numbering`, or a re-parse renders an ordered list as "4. 5. 6.". There is a test for this.
+- **A commit invalidates every model reference held across it.** Both `Deck.rebuildSlide` and `DocxDocument.rebuild` build fresh paragraphs/runs and drop the source map, so re-read from `deck.slides` / `doc.sections` after each commit.
+- `OpcPackage.toBlob` defaults to the **docx** content type — PPTX export must pass its own.
+
+Known limitations: PPTX `normAutofit` shrink factors are baked in at parse time and are not recomputed after an edit, so text can overflow its box (PowerPoint's "do not autofit" behaviour). Generated text — `<a:fld>` in PPTX, field results and list markers in DOCX — renders but is locked, since Office regenerates it.
 
 ### Conventions when extending
 

@@ -18,9 +18,10 @@ import { installWebFonts, type WebFontOptions } from '../render/webfonts.js';
 import { EditContext } from '../edit/context.js';
 import { EditSession } from '../edit/session.js';
 import { reconcileTextBody } from '../edit/reconcile.js';
-import { applyFormatToSelection, bodyElementOf, formatAtSelection } from '../edit/selection.js';
-import { installEditStyles, type TextBoxOutline } from '../edit/styles.js';
-import type { RunFormat } from '../edit/format.js';
+import { applyFormatToSelection, bodyElementOf, formatAtSelection } from '../../oxml/edit/selection.js';
+import { installEditStyles, type TextBoxOutline } from '../../oxml/edit/styles.js';
+import { readRunFormat } from '../edit/format.js';
+import type { RunFormat } from '../../oxml/edit/format.js';
 import { EDIT_ATTR } from '../text/render.js';
 import type { TextBody } from '../model.js';
 
@@ -257,7 +258,7 @@ export class Viewer {
         const sel = this.container.ownerDocument.getSelection();
         if (!sel || sel.rangeCount === 0) return;
         if (!bodyElementOf(sel.getRangeAt(0).startContainer, this.slideEl)) return;
-        this.onSelectionChange?.(formatAtSelection(this.slideEl, (k) => this.editCtx?.resolve(k)));
+        this.onSelectionChange?.(formatAtSelection(this.slideEl, (k) => this.editCtx?.resolve(k), readRunFormat));
       };
       this.container.ownerDocument.addEventListener('selectionchange', this.selectionHandler);
     }

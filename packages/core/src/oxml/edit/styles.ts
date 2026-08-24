@@ -1,5 +1,7 @@
 /**
- * Editor affordances — showing the user where the editable text boxes are.
+ * Editor affordances — showing the user where the editable regions are.
+ *
+ * Format-agnostic: keyed on the data attributes in ./attrs.ts.
  *
  * Delivered as one injected stylesheet rather than per-element inline styles so
  * `:hover` and `:focus-within` do the work natively; the renderer only has to
@@ -9,7 +11,7 @@
 
 export type TextBoxOutline = 'hover' | 'always' | 'none';
 
-const STYLE_ID = 'cbx-pptx-edit-styles';
+const STYLE_ID = 'cbx-edit-styles';
 
 /**
  * The outline sits on the text *body* box, which is inset from the shape by the

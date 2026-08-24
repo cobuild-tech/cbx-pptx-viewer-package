@@ -82,6 +82,7 @@ export function parseParagraph(p: XmlNode, ctx: ParseContext, tableBase?: TableB
   }
 
   if (anchors.length) para.anchors = anchors;
+  ctx.recordSource?.(para, p);
   return [para];
 }
 

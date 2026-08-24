@@ -1,7 +1,7 @@
 import type { CSSProperties } from 'react';
 import type { RunFormat } from '../index.js';
 
-export interface PptxEditorToolbarProps {
+export interface EditorToolbarProps {
   /** Formatting in effect at the caret, from `onSelectionChange`. */
   format: RunFormat;
   /** Apply a formatting override to the current selection. */
@@ -12,6 +12,8 @@ export interface PptxEditorToolbarProps {
   canRedo?: boolean;
   onExport?: () => void;
   hasEdits?: boolean;
+  /** Label for the export button. */
+  exportLabel?: string;
   className?: string;
   style?: CSSProperties;
 }
@@ -19,13 +21,14 @@ export interface PptxEditorToolbarProps {
 const SIZES = [8, 10, 12, 14, 18, 24, 28, 32, 40, 54, 66, 80];
 
 /**
- * Formatting toolbar for an editable {@link PptxViewer}.
+ * Formatting toolbar for an editable viewer. Format-agnostic: RunFormat is
+ * shared, so the same toolbar drives both PPTX and DOCX editing.
  *
  * Purely presentational — it reports what the user asked for and reflects the
  * format handed to it. Toggles use `format` as their source of truth so they
  * stay in sync with wherever the caret is.
  */
-export function PptxEditorToolbar({
+export function EditorToolbar({
   format,
   onFormat,
   onUndo,
@@ -34,9 +37,10 @@ export function PptxEditorToolbar({
   canRedo = false,
   onExport,
   hasEdits = false,
+  exportLabel = 'Download',
   className,
   style,
-}: PptxEditorToolbarProps) {
+}: EditorToolbarProps) {
   const toggle = (key: 'bold' | 'italic' | 'underline' | 'strike', label: string) => (
     <button
       key={key}
@@ -95,7 +99,7 @@ export function PptxEditorToolbar({
         <>
           <span style={divider} />
           <button type="button" style={btn} onClick={onExport} disabled={!hasEdits}>
-            Download .pptx
+            {exportLabel}
           </button>
         </>
       )}

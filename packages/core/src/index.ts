@@ -18,10 +18,16 @@
  *   viewer.undo(); viewer.redo();
  *   const blob = viewer.exportBlob();     // a valid .pptx with the edits
  *
- * DOCX usage (read-only):
+ * DOCX usage:
  *   const doc = loadDocx(arrayBuffer);
  *   const viewer = createDocxViewer(doc, containerEl, { fit: 'width' });
  *   // when done: viewer.destroy(); doc.dispose();
+ *
+ * DOCX editing (text): pass `editable`, which renders the document as one
+ * continuous column instead of fixed pages (see docx/edit/flow.ts).
+ *   const viewer = createDocxViewer(doc, containerEl, { editable: true });
+ *   viewer.applyFormat({ bold: true });
+ *   const blob = viewer.exportBlob();
  */
 
 // ─── PPTX ────────────────────────────────────────────────────────────────────
@@ -34,16 +40,22 @@ export { installWebFonts, collectFontFamilies, type WebFontOptions } from './ppt
 // PPTX text editing (opt in with `editable` on the viewer).
 export { EditSession, type EditSessionOptions } from './pptx/edit/session.js';
 export { EditContext } from './pptx/edit/context.js';
-export { reconcileTextBody, type Resolver } from './pptx/edit/reconcile.js';
+export { reconcileTextBody } from './pptx/edit/reconcile.js';
 export { writeTextBody, type ParaEdit, type Segment } from './pptx/edit/xmlWrite.js';
+export { readFormat } from './pptx/edit/format.js';
+export { EDIT_ATTR } from './oxml/edit/attrs.js';
+
+// Format-agnostic editing primitives, shared by every format slice.
 export {
   applyFormatToSelection,
   formatAtSelection,
   bodyElementOf,
-} from './pptx/edit/selection.js';
-export { readFormat, mergeFormat, type RunFormat } from './pptx/edit/format.js';
-export { installEditStyles, type TextBoxOutline } from './pptx/edit/styles.js';
-export { EDIT_ATTR } from './pptx/text/render.js';
+  type Resolver,
+  type ReadRunFormat,
+} from './oxml/edit/selection.js';
+export { mergeFormat, isEmptyFormat, type RunFormat } from './oxml/edit/format.js';
+export { installEditStyles, type TextBoxOutline } from './oxml/edit/styles.js';
+export { History, type Snapshot } from './oxml/edit/history.js';
 export type { ModelSource } from './pptx/deck/deck.js';
 export type { EditRenderContext } from './pptx/render/primitives.js';
 
@@ -74,6 +86,18 @@ export type {
   DocxPageSize,
   DocxPageMargins,
 } from './docx/model.js';
+
+// DOCX text editing (opt in with `editable` on the viewer).
+export { DocxEditSession, type DocxEditSessionOptions } from './docx/edit/session.js';
+export { DocxEditContext, type DocxEditRenderContext } from './docx/edit/context.js';
+export { reconcileParagraph } from './docx/edit/reconcile.js';
+export {
+  writeParagraphs,
+  type DocxParaEdit,
+  type DocxSegment,
+} from './docx/edit/xmlWrite.js';
+export { renderFlow, FLOW_CLASS } from './docx/edit/flow.js';
+export type { DocxSource } from './docx/document/context.js';
 
 import { DocxDocument } from './docx/document/document.js';
 /** Load a .docx from raw bytes into a renderable {@link DocxDocument}. */

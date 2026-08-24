@@ -243,7 +243,7 @@ describe('pptx edit — text box affordances', () => {
     document.body.appendChild(container);
     const viewer = new Viewer(deck, container, { editable: true, webFonts: false });
 
-    const style = document.getElementById('cbx-pptx-edit-styles');
+    const style = document.getElementById('cbx-edit-styles');
     expect(style).not.toBeNull();
     expect(style!.textContent).toContain('[data-cbx-body]:hover');
     expect(style!.textContent).toContain('cursor:text');
@@ -251,7 +251,7 @@ describe('pptx edit — text box affordances', () => {
     expect(style!.textContent).toContain('[data-cbx-body]:focus');
 
     viewer.destroy();
-    expect(document.getElementById('cbx-pptx-edit-styles')).toBeNull();
+    expect(document.getElementById('cbx-edit-styles')).toBeNull();
   });
 
   it('outlines every box in "always" mode and none in "none"', () => {
@@ -264,7 +264,7 @@ describe('pptx edit — text box affordances', () => {
       textBoxOutline: 'always',
     });
 
-    const style = () => document.getElementById('cbx-pptx-edit-styles')!.textContent!;
+    const style = () => document.getElementById('cbx-edit-styles')!.textContent!;
     expect(style()).toContain('[data-cbx-body]:not(:focus)');
 
     viewer.setTextBoxOutline('none');
@@ -280,7 +280,7 @@ describe('pptx edit — text box affordances', () => {
     const container = document.createElement('div');
     document.body.appendChild(container);
     const viewer = new Viewer(deck, container, { editable: false, webFonts: false });
-    expect(document.getElementById('cbx-pptx-edit-styles')).toBeNull();
+    expect(document.getElementById('cbx-edit-styles')).toBeNull();
     viewer.destroy();
   });
 
@@ -292,9 +292,9 @@ describe('pptx edit — text box affordances', () => {
     const v2 = new Viewer(Deck.load(buildDeck()), b, { editable: true, webFonts: false });
 
     v1.destroy();
-    expect(document.getElementById('cbx-pptx-edit-styles')).not.toBeNull();
+    expect(document.getElementById('cbx-edit-styles')).not.toBeNull();
     v2.destroy();
-    expect(document.getElementById('cbx-pptx-edit-styles')).toBeNull();
+    expect(document.getElementById('cbx-edit-styles')).toBeNull();
   });
 });
 

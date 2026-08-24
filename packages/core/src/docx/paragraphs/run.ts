@@ -96,6 +96,8 @@ function parseRun(
           run.fieldCode = fieldState.fieldInstr;
         }
         out.push(run);
+        // The <w:t> identifies the run; the <w:r> carries its <w:rPr>.
+        ctx.recordSource?.(run, node, r);
         pendingBreak = false;
         pendingTab = false;
         break;

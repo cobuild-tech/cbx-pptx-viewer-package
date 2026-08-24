@@ -10,18 +10,9 @@ import type { TextBody, Paragraph, TextRun, Bullet } from '../model.js';
 import { ptToPx } from '../../oxml/units.js';
 import { colorToCss } from '../color.js';
 import type { RenderDeps } from '../render/primitives.js';
+import { EDIT_ATTR } from '../../oxml/edit/attrs.js';
 
-/**
- * Attribute names the edit layer reads back off the DOM. Kept here beside the
- * code that writes them so the two cannot drift.
- */
-export const EDIT_ATTR = {
-  body: 'data-cbx-body',
-  para: 'data-cbx-para',
-  run: 'data-cbx-run',
-  /** Marks a toolbar-applied format that reconciliation must turn into a run. */
-  fmt: 'data-cbx-fmt',
-} as const;
+export { EDIT_ATTR };
 
 /**
  * PowerPoint's "single" (100%) line spacing is ~1.2x the font size — it derives

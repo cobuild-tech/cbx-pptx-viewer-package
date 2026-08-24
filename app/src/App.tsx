@@ -92,7 +92,7 @@ export function App() {
           </label>
         )}
 
-        {file && kind === 'pptx' && renderer === 'mine' && (
+        {file && ((kind === 'pptx' && renderer === 'mine') || kind === 'docx') && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <input
               type="checkbox"
@@ -147,7 +147,12 @@ export function App() {
         {file ? (
           <Suspense fallback={<div style={loadingFallback}>Loading renderer…</div>}>
             {kind === 'docx' && (
-              <DocxViewer key={`docx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+              <DocxViewer
+                key={`docx:${file.name}:${editable ? 'edit' : 'read'}`}
+                src={file}
+                editable={editable}
+                style={{ flex: 1, minHeight: 0 }}
+              />
             )}
             {kind === 'xlsx' && (
               <XlsxViewer key={`xlsx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
