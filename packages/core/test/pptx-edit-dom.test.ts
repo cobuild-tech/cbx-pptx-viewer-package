@@ -225,6 +225,79 @@ describe('pptx edit — reconciliation', () => {
   });
 });
 
+describe('pptx edit — text box affordances', () => {
+  beforeEach(() => {
+    document.head.innerHTML = '';
+    document.body.innerHTML = '';
+  });
+
+  it('leaves no inline outline that would beat the stylesheet', () => {
+    const deck = Deck.load(buildDeck());
+    const { el } = renderEditable(deck, 0);
+    expect(el.style.outline).toBe('');
+  });
+
+  it('installs a stylesheet outlining editable boxes on hover and focus', () => {
+    const deck = Deck.load(buildDeck());
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const viewer = new Viewer(deck, container, { editable: true, webFonts: false });
+
+    const style = document.getElementById('cbx-pptx-edit-styles');
+    expect(style).not.toBeNull();
+    expect(style!.textContent).toContain('[data-cbx-body]:hover');
+    expect(style!.textContent).toContain('cursor:text');
+    // Only the focused box is outlined solid.
+    expect(style!.textContent).toContain('[data-cbx-body]:focus');
+
+    viewer.destroy();
+    expect(document.getElementById('cbx-pptx-edit-styles')).toBeNull();
+  });
+
+  it('outlines every box in "always" mode and none in "none"', () => {
+    const deck = Deck.load(buildDeck());
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const viewer = new Viewer(deck, container, {
+      editable: true,
+      webFonts: false,
+      textBoxOutline: 'always',
+    });
+
+    const style = () => document.getElementById('cbx-pptx-edit-styles')!.textContent!;
+    expect(style()).toContain('[data-cbx-body]:not(:focus)');
+
+    viewer.setTextBoxOutline('none');
+    expect(style()).not.toContain('[data-cbx-body]:not(:focus)');
+    expect(style()).not.toContain(':hover:not(:focus)');
+    // Focus feedback survives in every mode.
+    expect(style()).toContain('[data-cbx-body]:focus');
+    viewer.destroy();
+  });
+
+  it('adds no stylesheet when the viewer is read-only', () => {
+    const deck = Deck.load(buildDeck());
+    const container = document.createElement('div');
+    document.body.appendChild(container);
+    const viewer = new Viewer(deck, container, { editable: false, webFonts: false });
+    expect(document.getElementById('cbx-pptx-edit-styles')).toBeNull();
+    viewer.destroy();
+  });
+
+  it('keeps the stylesheet until the last editable viewer is destroyed', () => {
+    const a = document.createElement('div');
+    const b = document.createElement('div');
+    document.body.append(a, b);
+    const v1 = new Viewer(Deck.load(buildDeck()), a, { editable: true, webFonts: false });
+    const v2 = new Viewer(Deck.load(buildDeck()), b, { editable: true, webFonts: false });
+
+    v1.destroy();
+    expect(document.getElementById('cbx-pptx-edit-styles')).not.toBeNull();
+    v2.destroy();
+    expect(document.getElementById('cbx-pptx-edit-styles')).toBeNull();
+  });
+});
+
 describe('pptx edit — viewer', () => {
   let container: HTMLElement;
 

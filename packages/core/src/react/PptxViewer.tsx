@@ -1,6 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Viewer, type Deck, type RunFormat } from '../index.js';
+import { Viewer, type Deck, type RunFormat, type TextBoxOutline } from '../index.js';
 import { useDeck, type DeckSource } from './useDeck.js';
 import { PptxEditorToolbar } from './PptxEditorToolbar.js';
 
@@ -38,6 +38,11 @@ export interface PptxViewerProps {
   editorToolbar?: boolean;
   /** Called after each committed edit, undo or redo. */
   onEdit?: (slideIndex: number) => void;
+  /**
+   * How editable text boxes are outlined: `'hover'` (default), `'always'` to
+   * reveal every box at once, or `'none'`. Ignored unless `editable`.
+   */
+  textBoxOutline?: TextBoxOutline;
 }
 
 export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function PptxViewer(
@@ -52,6 +57,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
     editable = false,
     editorToolbar = true,
     onEdit,
+    textBoxOutline = 'hover',
   },
   ref,
 ) {
@@ -73,6 +79,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
     onLoad?.(deck);
     const viewer = new Viewer(deck, stageRef.current, {
       editable,
+      textBoxOutline,
       onChange: (i, c) => {
         setIndex(i);
         setCount(c);
@@ -94,6 +101,11 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       viewerRef.current = null;
     };
   }, [deck, editable]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Changing the outline mode restyles in place — no need to rebuild the viewer.
+  useEffect(() => {
+    viewerRef.current?.setTextBoxOutline(textBoxOutline);
+  }, [textBoxOutline]);
 
   useImperativeHandle(
     ref,

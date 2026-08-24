@@ -72,7 +72,8 @@ export function renderTextBody(body: TextBody, deps: RenderDeps, flow = false): 
     // Without this the browser inserts <b>/<font> markup on its own shortcuts,
     // which reconciliation would have to unpick; the toolbar drives formatting.
     box.spellcheck = false;
-    box.style.outline = 'none';
+    // Focus/hover outlines come from the injected editor stylesheet — an inline
+    // `outline: none` here would beat it.
   }
 
   // Track auto-number counters per level.

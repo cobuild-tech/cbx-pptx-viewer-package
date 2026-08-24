@@ -42,6 +42,7 @@ export {
   bodyElementOf,
 } from './pptx/edit/selection.js';
 export { readFormat, mergeFormat, type RunFormat } from './pptx/edit/format.js';
+export { installEditStyles, type TextBoxOutline } from './pptx/edit/styles.js';
 export { EDIT_ATTR } from './pptx/text/render.js';
 export type { ModelSource } from './pptx/deck/deck.js';
 export type { EditRenderContext } from './pptx/render/primitives.js';

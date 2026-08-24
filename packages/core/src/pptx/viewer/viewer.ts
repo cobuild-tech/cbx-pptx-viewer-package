@@ -19,6 +19,7 @@ import { EditContext } from '../edit/context.js';
 import { EditSession } from '../edit/session.js';
 import { reconcileTextBody } from '../edit/reconcile.js';
 import { applyFormatToSelection, bodyElementOf, formatAtSelection } from '../edit/selection.js';
+import { installEditStyles, type TextBoxOutline } from '../edit/styles.js';
 import type { RunFormat } from '../edit/format.js';
 import { EDIT_ATTR } from '../text/render.js';
 import type { TextBody } from '../model.js';
@@ -51,6 +52,13 @@ export interface ViewerOptions {
   onEdit?: (slideIndex: number) => void;
   /** Called when the caret moves, with the formatting in effect there. */
   onSelectionChange?: (format: RunFormat) => void;
+  /**
+   * How editable text boxes are outlined, so the user can see what can be
+   * edited. `'hover'` (default) reveals a box under the pointer, `'always'`
+   * shows every editable box at once, `'none'` shows only the focused one.
+   * Ignored unless `editable`.
+   */
+  textBoxOutline?: TextBoxOutline;
 }
 
 export class Viewer {
@@ -71,6 +79,7 @@ export class Viewer {
   private readonly onSelectionChange: ViewerOptions['onSelectionChange'];
   private focusOutHandler: ((e: FocusEvent) => void) | null = null;
   private selectionHandler: (() => void) | null = null;
+  private disposeStyles: (() => void) | null = null;
 
   constructor(deck: Deck, container: HTMLElement, options: ViewerOptions = {}) {
     this.deck = deck;
@@ -83,6 +92,10 @@ export class Viewer {
     if (this.editable) {
       this.editCtx = new EditContext(deck, options.startIndex ?? 0);
       this.session = new EditSession(deck, { onChange: (i) => this.onEdit?.(i) });
+      this.disposeStyles = installEditStyles(
+        container.ownerDocument,
+        options.textBoxOutline ?? 'hover',
+      );
     }
 
     container.style.position = 'relative';
@@ -265,6 +278,13 @@ export class Viewer {
     return true;
   }
 
+  /** Change how editable text boxes are outlined. */
+  setTextBoxOutline(mode: TextBoxOutline): void {
+    if (!this.editable) return;
+    this.disposeStyles?.();
+    this.disposeStyles = installEditStyles(this.container.ownerDocument, mode);
+  }
+
   /** Commit whatever text body currently has focus, if any. */
   commitActive(): boolean {
     if (!this.editable || !this.slideEl) return false;
@@ -320,6 +340,7 @@ export class Viewer {
     if (this.selectionHandler) {
       this.container.ownerDocument.removeEventListener('selectionchange', this.selectionHandler);
     }
+    this.disposeStyles?.();
     if (this.slideEl) this.slideEl.remove();
     this.slideEl = null;
   }

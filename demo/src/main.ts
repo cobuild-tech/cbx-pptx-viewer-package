@@ -1,4 +1,12 @@
-import { OpcPackage, RelType, loadPptx, createViewer, type Viewer, type RunFormat } from '@cobuildx.ai/office-viewer';
+import {
+  OpcPackage,
+  RelType,
+  loadPptx,
+  createViewer,
+  type Viewer,
+  type RunFormat,
+  type TextBoxOutline,
+} from '@cobuildx.ai/office-viewer';
 
 const dropEl = document.getElementById('drop')!;
 const infoEl = document.getElementById('info')!;
@@ -12,6 +20,7 @@ const colorEl = document.getElementById('color') as HTMLInputElement;
 const undoEl = document.getElementById('undo') as HTMLButtonElement;
 const redoEl = document.getElementById('redo') as HTMLButtonElement;
 const downloadEl = document.getElementById('download') as HTMLButtonElement;
+const outlineEl = document.getElementById('outline') as HTMLSelectElement;
 
 for (const pt of [8, 10, 12, 14, 18, 24, 28, 32, 40, 54, 66, 80]) {
   sizeEl.add(new Option(String(pt), String(pt)));
@@ -38,6 +47,7 @@ function mountEditor(buf: ArrayBuffer): void {
   const deck = loadPptx(buf);
   viewer = createViewer(deck, stageEl, {
     editable: true,
+    textBoxOutline: outlineEl.value as TextBoxOutline,
     onChange: (i, c) => {
       posEl.textContent = `${i + 1} / ${c}`;
       syncButtons();
@@ -73,6 +83,9 @@ for (const b of document.querySelectorAll<HTMLButtonElement>('#editbar [data-fmt
 sizeEl.addEventListener('change', () => viewer?.applyFormat({ sizePt: Number(sizeEl.value) }));
 colorEl.addEventListener('change', () =>
   viewer?.applyFormat({ colorHex: colorEl.value.slice(1).toUpperCase() }),
+);
+outlineEl.addEventListener('change', () =>
+  viewer?.setTextBoxOutline(outlineEl.value as TextBoxOutline),
 );
 undoEl.addEventListener('click', () => viewer?.undo());
 redoEl.addEventListener('click', () => viewer?.redo());
