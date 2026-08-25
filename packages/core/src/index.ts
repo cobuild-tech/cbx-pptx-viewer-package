@@ -1,6 +1,6 @@
 /**
- * @cobuildx.ai/office-viewer — framework-agnostic .pptx and .docx parser and
- * DOM renderer. React bindings are available from
+ * @cobuildx.ai/office-viewer — framework-agnostic .pptx, .docx and .xlsx parser
+ * and DOM renderer. React bindings are available from
  * '@cobuildx.ai/office-viewer/react'.
  *
  * PPTX pipeline: read (OPC) -> parse (XML -> model) -> resolve (inheritance) -> render (DOM)
@@ -22,6 +22,12 @@
  *   const doc = loadDocx(arrayBuffer);
  *   const viewer = createDocxViewer(doc, containerEl, { fit: 'width' });
  *   // when done: viewer.destroy(); doc.dispose();
+ *
+ * XLSX usage:
+ *   const wb = loadXlsx(arrayBuffer);
+ *   const viewer = createXlsxViewer(wb, containerEl, { editable: true });
+ *   viewer.applyFormat({ bold: true });   // formats the selected cells
+ *   const blob = viewer.exportBlob();     // a valid .xlsx with the edits
  *
  * DOCX editing (text): pass `editable`, which renders the document as one
  * continuous column instead of fixed pages (see docx/edit/flow.ts).
@@ -112,7 +118,13 @@ export {
   createXlsxViewer,
   type XlsxViewerOptions,
 } from './xlsx/viewer/viewer.js';
-export { renderXlsxSheet, type RenderXlsxOptions } from './xlsx/render/dom.js';
+export {
+  renderXlsxSheet,
+  createSheetView,
+  XLSX_CELL_ATTR,
+  type RenderXlsxOptions,
+  type XlsxSheetView,
+} from './xlsx/render/dom.js';
 export { XlsxRelType } from './xlsx/relTypes.js';
 export type {
   XlsxSheet,
@@ -123,6 +135,27 @@ export type {
   XlsxMergeCell,
   XlsxCellStyle,
 } from './xlsx/model.js';
+
+// XLSX cell editing (opt in with `editable` on the viewer).
+export { XlsxEditSession, type XlsxEditSessionOptions } from './xlsx/edit/session.js';
+export { XlsxEditContext, type XlsxEditRenderContext } from './xlsx/edit/context.js';
+export {
+  parseInput,
+  editableText,
+  isBlank,
+  type CellInput,
+} from './xlsx/edit/values.js';
+export {
+  writeCell,
+  writeCellStyle,
+  ensureCell,
+  findCell,
+  growDimension,
+  setFullCalcOnLoad,
+} from './xlsx/edit/xmlWrite.js';
+export { StyleWriter, isEmptyPatch, type CellFormatPatch } from './xlsx/edit/styleWrite.js';
+export { readCellFormat, readCellPatch } from './xlsx/edit/format.js';
+export type { XlsxSource } from './xlsx/workbook/workbook.js';
 
 import { Workbook } from './xlsx/workbook/workbook.js';
 /** Load a .xlsx from raw bytes into a renderable {@link Workbook}. */

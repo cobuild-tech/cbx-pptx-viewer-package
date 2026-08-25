@@ -101,6 +101,12 @@ export function parseSheetXml(
   sheetXml: XmlNode,
   sharedStrings: string[],
   styles: XlsxStyles,
+  /**
+   * Called with every parsed cell and the `<c>` element it came from. The edit
+   * layer uses this to address the XML a cell must be written back into; a
+   * read-only parse simply omits it.
+   */
+  recordSource?: (cell: XlsxCell, node: XmlNode) => void,
 ): XlsxSheet {
   const rows = new Map<number, XlsxRow>();
   const cols: XlsxColumn[] = [];
@@ -178,6 +184,7 @@ export function parseSheetXml(
           style,
         };
 
+        recordSource?.(cell, cNode);
         row.cells.set(colIndex, cell);
         maxCol = Math.max(maxCol, colIndex + 1);
       }

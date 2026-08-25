@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-An npm-workspaces monorepo containing `@cobuildx.ai/office-viewer`, a published npm package that parses and renders `.pptx`/`.docx` files directly in the browser (real HTML/CSS/SVG output — no PDF conversion, no LibreOffice, ever, including for reference/diff comparisons).
+An npm-workspaces monorepo containing `@cobuildx.ai/office-viewer`, a published npm package that parses, renders and edits `.pptx`/`.docx`/`.xlsx` files directly in the browser (real HTML/CSS/SVG output — no PDF conversion, no LibreOffice, ever, including for reference/diff comparisons).
 
 ```
 packages/core/   the package itself (source, tests, build config)
@@ -51,11 +51,12 @@ To publish: bump `version` in `packages/core/package.json`, `npm run build`, the
 
 ## Architecture
 
-Both `.pptx` and `.docx` are OPC (zip-of-XML) packages. Each format runs the same pipeline shape over one shared low-level layer:
+`.pptx`, `.docx` and `.xlsx` are all OPC (zip-of-XML) packages. Each format runs the same pipeline shape over one shared low-level layer:
 
 ```
 PPTX:  read (OPC) -> parse (XML -> model) -> resolve (inheritance)  -> render (DOM)
 DOCX:  read (OPC) -> parse (XML -> model) -> paginate (sections)    -> render (DOM)
+XLSX:  read (OPC) -> parse (XML -> model, lazily per sheet)         -> render (DOM)
 ```
 
 - **read** (`oxml/package.ts`) — unzip, resolve content types + relationships.
@@ -101,18 +102,31 @@ docx/             Word feature slices (same shape as pptx)
   viewer/         paginated scroll view + thumbnail strip
 ```
 
-**Hard rule: `pptx/` and `docx/` must never import from each other.** Anything both need belongs in `oxml/`, not duplicated or cross-imported.
+```
+xlsx/             Excel feature slices (same shape as pptx/docx)
+  workbook/       top-level loader; sheet list, lazy per-sheet parse, source map
+  sheets/         worksheet parse (rows, cells, merges, cols) + ref utilities
+  styles/         numFmts / fonts / fills / borders / cellXfs -> XlsxCellStyle
+  edit/           cell editing: value interpretation (values.ts), worksheet
+                  write-back (xmlWrite.ts), style interning (styleWrite.ts),
+                  read-only rules (context.ts), undo/redo + commits (session.ts)
+  model.ts        sheet/row/cell model
+  render/         model -> HTML grid + formula bar (dom.ts), selection, keyboard
+  viewer/         sheet tabs, commit cycle, export
+```
+
+**Hard rule: `pptx/`, `docx/` and `xlsx/` must never import from each other.** Anything both need belongs in `oxml/`, not duplicated or cross-imported.
 
 ### Status
 
 - PPTX: renders ~106 preset shapes + custom geometry, charts (static SVG snapshot), tables, SmartArt (cached fast path + data-model layout fallback by family), gradients (incl. radial focus/path), autofit text. Effects (shadow/glow/reflection), transitions, and animations are not rendered. `.ppt` (legacy binary) is out of scope.
 - PPTX **text editing** (opt in via `<PptxViewer editable>` / `createViewer(deck, el, { editable: true })`): inline WYSIWYG editing of the slide's own text bodies — including table cell text — with paragraph split/merge, a formatting toolbar (bold/italic/underline/strike, size, colour, typeface), undo/redo, and export back to a `.pptx` `Blob` via `exportBlob()`. Text inherited from a layout or master is rendered but read-only, since editing it would change every slide that shares it. Shape geometry, images and charts are not editable.
 - DOCX **text editing** (opt in via `<DocxViewer editable>` / `createDocxViewer(doc, el, { editable: true })`): inline WYSIWYG editing of body text including table cell text, paragraph split/merge, the same formatting toolbar, undo/redo, and export to a `.docx` `Blob`. Header and footer text renders but is read-only, as are generated list markers and field results. **Edit mode renders the document as one continuous column instead of fixed pages** — see below.
-- XLSX: read-only.
+- XLSX **cell editing** (opt in via `<XlsxViewer editable>` / `createXlsxViewer(wb, el, { editable: true })`): in-place editing of cell values and formulas with Excel-like keys (arrows, Enter, Tab, F2, Delete, shift-select, formula bar), cell formatting (font, fill, alignment, wrap, number format), undo/redo, and export to a `.xlsx` `Blob`. Formulas are stored but never evaluated — the workbook is flagged `fullCalcOnLoad` so Excel recalculates on open. Cells on a protected sheet, cells covered by a merge, and array/shared-formula hosts are read-only. Inserting/deleting rows and columns is out of scope (it would have to rewrite every reference and formula).
 
 ### How editing works
 
-`pptx/edit/` and `docx/edit/` share one architecture; the format-agnostic parts live in `oxml/edit/`. Use them as the reference pattern for XLSX:
+`pptx/edit/`, `docx/edit/` and `xlsx/edit/` share one architecture; the format-agnostic parts live in `oxml/edit/`:
 
 1. **Address at parse time.** Model indices do not match XML indices (PPTX drops empty runs and turns `<a:br>`/`<a:fld>` into runs; DOCX's `logicalChildren` flattens `<w:sdt>`/`<w:smartTag>`/`<w:fldSimple>`), so `ParseScope.recordSource` / `ParseContext.recordSource` captures the exact `XmlNode` each object came from, into a `WeakMap` on the `Deck`/`DocxDocument`. The model itself stays a pure value tree. Because each parse scope carries its own part path, this also identifies what is read-only for free — layout/master text in PPTX, header/footer text in DOCX.
 2. **Reconcile, don't intercept.** contentEditable is left alone to do whatever it likes; on blur the DOM subtree is read back into a `ParaEdit[]` (`reconcile.ts`). Typing, Enter, Backspace, paste and formatting therefore share one code path rather than one per interaction. The editable unit is a text body in PPTX and a single paragraph in DOCX, because a DOCX body is one long flow with no txBody-sized container.
@@ -120,9 +134,11 @@ docx/             Word feature slices (same shape as pptx)
 4. **Snapshot for undo.** `OpcPackage.serializePart` / `setPart` give exact undo without inverse ops (`oxml/edit/history.ts`).
 5. **Export is non-destructive.** `toBytes()` re-serializes only dirty parts; every other part is emitted from its original bytes unchanged (there is a test asserting this).
 
-**Two format-specific wrinkles worth knowing before you touch either slice:**
+**Format-specific wrinkles worth knowing before you touch a slice:**
 
 - **DOCX runs are many-to-one.** One `<w:r>` emits one `DocxRun` per `<w:t>` child, so a run is addressed by its `<w:t>`, with the owning `<w:r>` carried alongside for `<w:rPr>`. In PPTX an `<a:r>` is one run.
+- **XLSX has no inline formatting.** A cell points at a `cellXfs` entry, which points at a font/fill/border/numFmt. So formatting means *interning* (`edit/styleWrite.ts`): derive the new entry from the one the cell already uses, reuse an identical existing entry, append only when there is none. It also means one formatting change spans two parts (worksheet + `xl/styles.xml`), which is why `oxml/edit/history.ts` stores a *change set* rather than a single snapshot.
+- **XLSX text is written inline.** An edited string becomes `t="inlineStr"` rather than a new entry in `xl/sharedStrings.xml`, so editing one cell never rewrites a part every sheet shares.
 - **DOCX edits in continuous flow.** The paginator (`docx/viewer/paginate.ts`) splits a paragraph mid-text across a page boundary into *cloned* objects on two page sheets — a contentEditable region cannot span that, and the clones have no source identity. So edit mode renders one continuous column (`docx/edit/flow.ts`) and re-paginates on exit. This costs no fidelity: **pagination is not stored in a `.docx`** (Word reflows on open), so our pages are purely a display concern.
 
 **Traps that have already bitten:**
@@ -131,10 +147,12 @@ docx/             Word feature slices (same shape as pptx)
 - **A commit invalidates every model reference held across it.** Both `Deck.rebuildSlide` and `DocxDocument.rebuild` build fresh paragraphs/runs and drop the source map, so re-read from `deck.slides` / `doc.sections` after each commit.
 - `OpcPackage.toBlob` defaults to the **docx** content type — PPTX export must pass its own.
 
+- **Rows and cells must stay in ascending order.** Excel rejects a worksheet where they are not, so `xlsx/edit/xmlWrite.ts` splices new `<row>`/`<c>` elements into position rather than appending.
+
 Known limitations: PPTX `normAutofit` shrink factors are baked in at parse time and are not recomputed after an edit, so text can overflow its box (PowerPoint's "do not autofit" behaviour). Generated text — `<a:fld>` in PPTX, field results and list markers in DOCX — renders but is locked, since Office regenerates it.
 
 ### Conventions when extending
 
 - **Fidelity fixes must be generic** — correct for any conformant Office file, never special-cased to a particular deck/document.
 - **Render-agnostic model first.** Parsing produces a plain model; rendering is a separate pass. New features should respect that boundary.
-- **Adding a new format** (e.g. `.xlsx`): add a sibling `src/<format>/` mirroring the `pptx`/`docx` shape (`model.ts`, `relTypes.ts`, parse slices, `render/dom.ts`, `viewer/`), reuse `oxml/` for read/units/xml, then export `load<Format>` + `create<Format>Viewer` from `src/index.ts` and add a React wrapper/hook under `src/react/`.
+- **Adding a new format**: add a sibling `src/<format>/` mirroring the `pptx`/`docx`/`xlsx` shape (`model.ts`, `relTypes.ts`, parse slices, `render/dom.ts`, `viewer/`), reuse `oxml/` for read/units/xml, then export `load<Format>` + `create<Format>Viewer` from `src/index.ts` and add a React wrapper/hook under `src/react/`.

@@ -1,14 +1,16 @@
 # pptx-viewer-monorepo
 
-A frontend Office-document viewer — parse and render **PowerPoint (`.pptx`)**
-and **Word (`.docx`)** files directly in the browser, instead of converting them
-to PDF or images first. Documents render to real HTML/CSS, so text is
-selectable, hyperlinks work, and the output is accessible.
+A frontend Office-document viewer and editor — parse, render and edit
+**PowerPoint (`.pptx`)**, **Word (`.docx`)** and **Excel (`.xlsx`)** files
+directly in the browser, instead of converting them to PDF or images first.
+Documents render to real HTML/CSS, so text is selectable, hyperlinks work, and
+the output is accessible.
 
 Published to npm as [`@cobuildx.ai/office-viewer`](https://www.npmjs.com/package/@cobuildx.ai/office-viewer).
 
-> Status: **read-only viewers** for both formats — `.pptx` and `.docx` are
-> parsed and rendered to the DOM. See [What's supported](#whats-supported) and
+> Status: all three formats render to the DOM, and all three support opt-in
+> in-place text/cell editing with undo/redo and export back to a valid Office
+> file. See [What's supported](#whats-supported) and
 > [Extending the package](#extending-the-package).
 
 ## Why
@@ -20,12 +22,14 @@ layout/master/theme and style-inheritance chains the desktop apps use.
 
 ## How it works
 
-Both `.pptx` and `.docx` are ZIP packages of XML parts (the OPC package). Each
-format runs the same shape of pipeline over a shared low-level layer:
+`.pptx`, `.docx` and `.xlsx` are all ZIP packages of XML parts (the OPC
+package). Each format runs the same shape of pipeline over a shared low-level
+layer:
 
 ```
 PPTX:  read (OPC)  ->  parse (XML -> model)  ->  resolve (inheritance)  ->  render (DOM)
 DOCX:  read (OPC)  ->  parse (XML -> model)  ->  paginate (sections)    ->  render (DOM)
+XLSX:  read (OPC)  ->  parse (XML -> model, lazily per sheet)           ->  render (DOM)
 ```
 
 - **read** — unzip the package, resolve content types and relationships (shared
@@ -37,8 +41,14 @@ DOCX:  read (OPC)  ->  parse (XML -> model)  ->  paginate (sections)    ->  rend
     color map and transformed (lumMod/lumOff/tint/shade/alpha).
   - *DOCX*: styles cascade (run → paragraph → linked → docDefaults), then blocks
     are measured off-screen and flowed into pages by section page-size/margins.
+  - *XLSX*: a cell carries no inline formatting — `<c s="3">` resolves through
+    `cellXfs` to a font, fill, border and number format.
 - **render** — emit HTML/CSS/SVG. PPTX positions shapes absolutely and scales
-  the whole slide to fit; DOCX flows pages in a scrollable stack.
+  the whole slide to fit; DOCX flows pages in a scrollable stack; XLSX paints a
+  grid with sticky headers, a formula bar and sheet tabs.
+- **edit** (opt-in) — the DOM subtree is read back into the model on commit,
+  written into the original XML, and only the parts that changed are
+  re-serialized on export.
 
 All geometry is converted from EMU (914,400 per inch) to CSS pixels at 96 DPI
 via the shared `oxml/units` helpers.
@@ -61,25 +71,28 @@ points, so non-React consumers never pull in React:
 
 | Entry | Contents |
 | --- | --- |
-| `@cobuildx.ai/office-viewer` | framework-agnostic: `loadPptx`/`loadDocx`, viewers, renderers, low-level OOXML building blocks |
-| `@cobuildx.ai/office-viewer/react` | `<PptxViewer />`, `<DocxViewer />`, `useDeck`, `useDocument` |
+| `@cobuildx.ai/office-viewer` | framework-agnostic: `loadPptx`/`loadDocx`/`loadXlsx`, viewers, edit sessions, renderers, low-level OOXML building blocks |
+| `@cobuildx.ai/office-viewer/react` | `<PptxViewer />`, `<DocxViewer />`, `<XlsxViewer />`, `<EditorToolbar />`, `useDeck`, `useDocument`, `useWorkbook` |
 
 The engine itself is organized as a **shared low-level layer + per-format
 feature slices**. Each format is self-contained and must not import another
 format's code; only `oxml/` is shared. (See
-[Extending the package](#extending-the-package): *docx is a sibling of pptx and
-must never import pptx*.)
+[Extending the package](#extending-the-package): *docx and xlsx are siblings of
+pptx and must never import pptx*.)
 
 ```
 packages/core/src/
-  index.ts          public API: loadPptx / loadDocx, viewers, low-level exports
+  index.ts          public API: loadPptx / loadDocx / loadXlsx, viewers, low-level exports
   react/            React entry point (@cobuildx.ai/office-viewer/react)
-    PptxViewer.tsx  DocxViewer.tsx  useDeck.ts  useDocument.ts
+    PptxViewer.tsx  DocxViewer.tsx  XlsxViewer.tsx  EditorToolbar.tsx
+    useDeck.ts      useDocument.ts  useWorkbook.ts
 
   oxml/             SHARED, format-agnostic
     package.ts      OPC: unzip, content types, relationship resolution
     xml.ts          order-preserving, namespace-aware XML tree + helpers
     units.ts        EMU / point / twip -> CSS pixel conversions
+    edit/           editing primitives every format shares: DOM markers, the
+                    RunFormat value, snapshot undo, selection, styles
 
   pptx/             PowerPoint feature slices
     deck/           top-level loader; presentation + slide/layout/master/theme
@@ -94,11 +107,21 @@ packages/core/src/
 
   docx/             Word feature slices (same shape as pptx)
     document/       top-level loader; body parsing
+    edit/           text editing + continuous-flow renderer
     paragraphs/     paragraphs + runs
     styles/  numbering/  tables/  images/
     model.ts        DOCX page/block/paragraph/table model
     render/         model -> HTML/CSS (dom.ts), pagination-aware
     viewer/         paginated scroll view + thumbnail strip
+
+  xlsx/             Excel feature slices (same shape as pptx/docx)
+    workbook/       top-level loader; sheet list, lazy per-sheet parse
+    sheets/         worksheet parse (rows, cells, merges, cols) + ref utilities
+    styles/         numFmts / fonts / fills / borders / cellXfs
+    edit/           cell editing: values, worksheet write-back, style interning
+    model.ts        XLSX sheet/row/cell model
+    render/         model -> HTML grid + formula bar, selection, keyboard
+    viewer/         sheet tabs, commit cycle, export
 ```
 
 ## Usage
@@ -125,6 +148,7 @@ function App() {
     <>
       <input type="file" accept=".pptx,.docx"
         onChange={(e) => setFile(e.target.files?.[0] ?? null)} />
+      {/* add `editable` to any viewer for in-place editing + export */}
       {file && (isDocx ? <DocxViewer src={file} /> : <PptxViewer src={file} />)}
     </>
   );
@@ -143,7 +167,11 @@ function App() {
 ### Framework-agnostic core
 
 ```ts
-import { loadPptx, createViewer, loadDocx, createDocxViewer } from '@cobuildx.ai/office-viewer';
+import {
+  loadPptx, createViewer,
+  loadDocx, createDocxViewer,
+  loadXlsx, createXlsxViewer,
+} from '@cobuildx.ai/office-viewer';
 
 // PPTX
 const deck = loadPptx(arrayBuffer);
@@ -159,6 +187,16 @@ const docViewer = createDocxViewer(doc, document.getElementById('stage')!, { fit
 docViewer.goTo(2);
 docViewer.destroy();
 doc.dispose();
+
+// XLSX
+const workbook = loadXlsx(arrayBuffer);
+const sheetViewer = createXlsxViewer(workbook, document.getElementById('stage')!, {
+  editable: true,
+});
+sheetViewer.applyFormat({ bold: true, fillHex: 'FFE600' }); // formats the selected cells
+const blob = sheetViewer.exportBlob();                      // a valid .xlsx with the edits
+sheetViewer.destroy();
+workbook.dispose();
 ```
 
 PPTX sizing defaults to `fit: 'contain'` (fit the whole slide and centre it).
@@ -191,7 +229,7 @@ up the change (or `npm link` locally if you want to iterate faster).
 
 ### Comparing renderers
 
-The React app lets you upload a `.pptx`/`.docx` and (for `.pptx`) view the same
+The React app lets you upload a `.pptx`/`.docx`/`.xlsx` and (for `.pptx`) view the same
 file through this package or three third-party libraries, to compare fidelity:
 
 | Option | Package | Approach |
@@ -240,10 +278,34 @@ won't load there.
 - Header/footer bands (incl. page-number/STYLEREF fields and banner images)
 - Section-aware **pagination** (page size + margins), scroll view + thumbnails
 
+### XLSX
+
+- Cell values and formulas, shared and inline strings, number formats
+- Fonts, fills, borders, alignment and wrapping resolved through `cellXfs`
+- Merged cells, column widths, row heights, hidden rows
+- Grid with sticky row/column headers, formula bar and sheet tabs
+
+### Editing (opt in with `editable`)
+
+- **PPTX**: the slide's own text bodies, incl. table cells — split/merge
+  paragraphs, character formatting, undo/redo, export. Layout/master text is
+  read-only, since editing it would change every slide that shares it.
+- **DOCX**: body text incl. table cells. Headers/footers, list markers and field
+  results are read-only. Edit mode renders one continuous column and
+  re-paginates on exit (pagination isn't stored in a `.docx` anyway).
+- **XLSX**: cell values, formulas and cell formatting (font, fill, alignment,
+  wrap, number format) with Excel-like keys — arrows, Enter, Tab, F2, Delete,
+  shift-select, formula bar. Protected sheets, merged-over cells and
+  array/shared-formula hosts are read-only.
+- Export is non-destructive: only edited parts are re-serialized, everything
+  else is re-zipped from its original bytes.
+
 ## Known limitations
 
-- **Read-only** — both viewers render only; no editing (the model is
-  intentionally render-agnostic to keep round-trip editing tractable later)
+- Editing covers text and cell content only — shape geometry, images, charts,
+  and inserting/deleting spreadsheet rows and columns are not editable
+- Formulas are never evaluated; the workbook is flagged so Excel recalculates
+  when it opens the exported file
 - PPTX: only the implemented preset geometries are exact; the rest fall back to
   a rectangle
 - Image *fills* inside shapes don't yet apply `srcRect` cropping (standalone
@@ -262,12 +324,12 @@ Conventions to follow:
 
 - **Shared vs. format code.** Anything format-agnostic (OPC packaging, XML
   helpers, unit conversion) lives in `oxml/` and is the *only* shared layer.
-  Each format (`pptx/`, `docx/`) is a self-contained slice.
+  Each format (`pptx/`, `docx/`, `xlsx/`) is a self-contained slice.
 - **Formats never import each other.** `docx/` must not import from `pptx/` and
   vice-versa. If two formats need the same thing, lift it into `oxml/`.
-- **Adding a format** (e.g. `.xlsx`): add a sibling `src/<format>/` with its own
+- **Adding a format**: add a sibling `src/<format>/` with its own
   `model.ts`, `relTypes.ts`, parse slices, `render/dom.ts`, and `viewer/`,
-  mirroring the `pptx`/`docx` shape; reuse `oxml/` for read/units/xml; then
+  mirroring the `pptx`/`docx`/`xlsx` shape; reuse `oxml/` for read/units/xml; then
   export `load<Format>` + `create<Format>Viewer` from `src/index.ts` and add a
   React wrapper + hook in `packages/react/src/`.
 - **Render-agnostic model first.** Parsing produces a plain model; rendering is a
@@ -284,7 +346,7 @@ Conventions to follow:
 - Speaker-notes panel, fullscreen
 - Richer DOCX coverage (footnotes, more field types)
 - Optional visual-diff testing against reference renders
-- Further formats (e.g. `.xlsx`) as new sibling slices
+- XLSX: row/column insert & delete, charts, conditional formatting
 
 ## License
 

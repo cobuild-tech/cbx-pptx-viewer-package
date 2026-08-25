@@ -10,7 +10,7 @@
  *  - the re-parse rebuilds styles and numbering from scratch, which is what
  *    keeps ordered lists numbered from 1 (see DocxDocument.parse).
  */
-import { History } from '../../oxml/edit/history.js';
+import { History, type Snapshot } from '../../oxml/edit/history.js';
 import type { DocxDocument } from '../document/document.js';
 import type { DocxParagraph, DocxSection } from '../model.js';
 import { child, type XmlNode } from '../../oxml/xml.js';
@@ -89,9 +89,9 @@ export class DocxEditSession {
     return this.restore(this.history.redo((p) => this.doc.snapshotPart(p)));
   }
 
-  private restore(snapshot: { part: string; xml: string } | undefined): DocxSection[] | undefined {
-    if (!snapshot) return undefined;
-    this.doc.restorePart(snapshot.part, snapshot.xml);
+  private restore(snapshots: Snapshot[] | undefined): DocxSection[] | undefined {
+    if (!snapshots || snapshots.length === 0) return undefined;
+    for (const snap of snapshots) this.doc.restorePart(snap.part, snap.xml);
     // setPart drops the cached parse, so this re-reads the restored XML.
     const sections = this.doc.rebuild();
     this.onChange?.();
