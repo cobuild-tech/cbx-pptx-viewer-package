@@ -92,7 +92,7 @@ export function App() {
           </label>
         )}
 
-        {file && ((kind === 'pptx' && renderer === 'mine') || kind === 'docx') && (
+        {file && ((kind === 'pptx' && renderer === 'mine') || kind === 'docx' || kind === 'xlsx') && (
           <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
             <input
               type="checkbox"
@@ -100,7 +100,9 @@ export function App() {
               onChange={(e) => setEditable(e.target.checked)}
               style={{ accentColor: accent }}
             />
-            <span style={{ color: editable ? '#eee' : '#aaa' }}>Edit text</span>
+            <span style={{ color: editable ? '#eee' : '#aaa' }}>
+              {kind === 'xlsx' ? 'Edit cells' : 'Edit text'}
+            </span>
           </label>
         )}
 
@@ -155,7 +157,12 @@ export function App() {
               />
             )}
             {kind === 'xlsx' && (
-              <XlsxViewer key={`xlsx:${file.name}`} src={file} style={{ flex: 1, minHeight: 0 }} />
+              <XlsxViewer
+                key={`xlsx:${file.name}:${editable ? 'edit' : 'read'}`}
+                src={file}
+                editable={editable}
+                style={{ flex: 1, minHeight: 0 }}
+              />
             )}
             {kind === 'pptx' && renderer === 'mine' && (
               <PptxViewer

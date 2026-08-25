@@ -1,4 +1,4 @@
-import type { CSSProperties } from 'react';
+import type { CSSProperties, ReactNode } from 'react';
 import type { RunFormat } from '../index.js';
 
 export interface EditorToolbarProps {
@@ -14,6 +14,11 @@ export interface EditorToolbarProps {
   hasEdits?: boolean;
   /** Label for the export button. */
   exportLabel?: string;
+  /**
+   * Format-specific controls, rendered after the shared ones — e.g. a
+   * spreadsheet's cell fill and alignment, which have no run-level equivalent.
+   */
+  extras?: ReactNode;
   className?: string;
   style?: CSSProperties;
 }
@@ -38,6 +43,7 @@ export function EditorToolbar({
   onExport,
   hasEdits = false,
   exportLabel = 'Download',
+  extras,
   className,
   style,
 }: EditorToolbarProps) {
@@ -85,6 +91,13 @@ export function EditorToolbar({
         style={{ ...btn, width: 34, padding: 2 }}
         title="Text colour"
       />
+
+      {extras && (
+        <>
+          <span style={divider} />
+          {extras}
+        </>
+      )}
 
       <span style={divider} />
 

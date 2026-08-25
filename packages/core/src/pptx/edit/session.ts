@@ -7,7 +7,7 @@
  */
 import type { Deck } from '../deck/deck.js';
 import type { Slide, TextBody } from '../model.js';
-import { History } from '../../oxml/edit/history.js';
+import { History, type Snapshot } from '../../oxml/edit/history.js';
 import { writeTextBody, type ParaEdit } from './xmlWrite.js';
 
 export interface EditSessionOptions {
@@ -77,10 +77,10 @@ export class EditSession {
     return this.restore(this.history.redo((p) => this.deck.snapshotPart(p)));
   }
 
-  private restore(snapshot: { part: string; xml: string } | undefined): Slide | undefined {
-    if (!snapshot) return undefined;
-    this.deck.restorePart(snapshot.part, snapshot.xml);
-    const index = this.deck.slides.findIndex((s) => s.part === snapshot.part);
+  private restore(snapshots: Snapshot[] | undefined): Slide | undefined {
+    if (!snapshots || snapshots.length === 0) return undefined;
+    for (const snap of snapshots) this.deck.restorePart(snap.part, snap.xml);
+    const index = this.deck.slides.findIndex((s) => s.part === snapshots[0]!.part);
     if (index === -1) return undefined;
     // setPart drops the cached parse, so this re-reads the restored XML.
     const slide = this.deck.rebuildSlide(index);
