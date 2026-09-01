@@ -7,7 +7,7 @@
  * renderer and is also what `renderGroup` recurses into.
  */
 import type { Slide, SlideSize, Shape, FrameShape } from '../model.js';
-import { applyFillBackground, positioned, type RenderDeps } from './primitives.js';
+import { applyFillBackground, markSelectable, positioned, type RenderDeps } from './primitives.js';
 import { renderPreset, renderConnector, renderGroup } from '../shapes/render.js';
 import { renderPicture } from '../pictures/render.js';
 import { renderTable } from '../tables/render.js';
@@ -27,7 +27,13 @@ export function renderSlide(slide: Slide, size: SlideSize, deps: RenderDeps): HT
 
   for (const shape of slide.shapes) {
     const el = renderShape(shape, deps);
-    if (el) root.appendChild(el);
+    if (!el) continue;
+    // A group's children are addressable too (see `renderGroup`) — PowerPoint
+    // selects the group first and only reaches inside on a second click, which
+    // the selection layer decides, not the renderer. A diagram's generated
+    // shapes are never the user's to move, so they stay unmarked.
+    markSelectable(el, shape, deps);
+    root.appendChild(el);
   }
   return root;
 }

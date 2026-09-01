@@ -48,6 +48,27 @@ export { installWebFonts, collectFontFamilies, type WebFontOptions } from './ppt
 
 // PPTX text editing (opt in with `editable` on the viewer).
 export { EditSession, type EditSessionOptions } from './pptx/edit/session.js';
+export {
+  writeTransform,
+  removeShape,
+  reorderShape,
+  isShapeNode,
+  type ZOrderMove,
+} from './pptx/edit/shapeOps.js';
+export {
+  moveBox,
+  resizeBox,
+  rotateBox,
+  boundsOf,
+  normalizeAngle,
+  type Handle,
+  type ResizeOptions,
+} from './pptx/edit/geometry.js';
+export {
+  ShapeSelection,
+  type ShapeSelectionOptions,
+  type SlideView,
+} from './pptx/viewer/selection.js';
 export { EditContext } from './pptx/edit/context.js';
 export {
   deleteSlide,

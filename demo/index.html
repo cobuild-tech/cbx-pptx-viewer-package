@@ -71,14 +71,10 @@
         <button id="undo" title="Undo">&#8630;</button>
         <button id="redo" title="Redo">&#8631;</button>
         <span class="sep"></span>
-        <label style="display:flex;align-items:center;gap:5px;">
-          Boxes
-          <select id="outline" title="Outline editable text boxes">
-            <option value="hover">on hover</option>
-            <option value="always">always</option>
-            <option value="none">focused only</option>
-          </select>
-        </label>
+        <span id="sel" class="hint">no shape selected</span>
+        <button id="front" title="Bring forward (Ctrl+])">&uarr;</button>
+        <button id="back" title="Send backward (Ctrl+[)">&darr;</button>
+        <button id="delshape" title="Delete shape (Del)">Delete shape</button>
         <span class="sep"></span>
         <button id="prev">&lsaquo; Prev</button>
         <span id="pos">— / —</span>

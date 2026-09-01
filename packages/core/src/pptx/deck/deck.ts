@@ -186,6 +186,15 @@ export class Deck {
     return true;
   }
 
+  /**
+   * The parsed XML root of a slide's part — the same cached node the edit layer
+   * mutates, so structural edits and re-parsing see one tree.
+   */
+  slideXml(index: number): XmlNode | undefined {
+    const part = this.slideParts[index];
+    return part === undefined ? undefined : this.pkg.getXml(part);
+  }
+
   /** Mark a slide's part as mutated so export re-serializes it. */
   markSlideDirty(index: number): void {
     const part = this.slideParts[index];

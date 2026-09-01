@@ -6,9 +6,11 @@
  * React bindings hold a session; neither of them touches XML directly.
  */
 import type { Deck } from '../deck/deck.js';
-import type { Slide, TextBody } from '../model.js';
+import type { Shape, Slide, TextBody, Transform } from '../model.js';
 import { History, type Snapshot } from '../../oxml/edit/history.js';
+import type { XmlNode } from '../../oxml/xml.js';
 import { writeTextBody, type ParaEdit } from './xmlWrite.js';
+import { removeShape, reorderShape, writeTransform, type ZOrderMove } from './shapeOps.js';
 
 export interface EditSessionOptions {
   /** Called after any change to the deck (commit, undo or redo). */
@@ -86,6 +88,89 @@ export class EditSession {
     writeTextBody(src.node, paras, (model) => this.deck.sourceOf(model));
     this.deck.markSlideDirty(slideIndex);
 
+    const slide = this.deck.rebuildSlide(slideIndex);
+    this.onChange?.(slideIndex);
+    return slide;
+  }
+
+  // ─── Shape edits ───────────────────────────────────────────────────────────
+  //
+  // Moving, resizing, deleting and restacking all rewrite the slide's own part
+  // and nothing else, so they share the text path's undo model: snapshot the
+  // part, mutate the cached XML, re-parse the slide.
+
+  /** True if this shape belongs to the slide itself and may be manipulated. */
+  isShapeEditable(slideIndex: number, shape: Shape): boolean {
+    return this.deck.isEditable(slideIndex, shape);
+  }
+
+  /** Write a new position/size/rotation for a shape. */
+  commitShapeTransform(slideIndex: number, shape: Shape, transform: Transform): Slide | undefined {
+    return this.commitShapeTransforms(slideIndex, [{ shape, transform }]);
+  }
+
+  /**
+   * Write new geometry for several shapes as **one** undoable change — dragging
+   * a multiple selection is a single user action, and undoing it a shape at a
+   * time would be wrong.
+   */
+  commitShapeTransforms(
+    slideIndex: number,
+    edits: Array<{ shape: Shape; transform: Transform }>,
+  ): Slide | undefined {
+    return this.editShapes(
+      slideIndex,
+      edits.map((e) => ({ shape: e.shape, mutate: (node: XmlNode) => writeTransform(node, e.transform) })),
+    );
+  }
+
+  /** Delete shapes from the slide, as one undoable change. */
+  deleteShapes(slideIndex: number, shapes: Shape[]): Slide | undefined {
+    return this.editShapes(
+      slideIndex,
+      shapes.map((shape) => ({ shape, mutate: (node: XmlNode, root: XmlNode) => removeShape(root, node) })),
+    );
+  }
+
+  /** Move a shape through the z-order. */
+  reorderShape(slideIndex: number, shape: Shape, move: ZOrderMove): Slide | undefined {
+    return this.editShapes(slideIndex, [
+      { shape, mutate: (node: XmlNode, root: XmlNode) => reorderShape(root, node, move) },
+    ]);
+  }
+
+  /**
+   * Run shape mutations against the slide's XML as one undoable change.
+   *
+   * The snapshot is taken before any mutation but only *kept* if at least one
+   * reports that it changed something — otherwise a no-op (dropping a shape
+   * back where it started, or sending one that is already at the back further
+   * back) would leave an undo entry that undoes nothing.
+   */
+  private editShapes(
+    slideIndex: number,
+    edits: Array<{ shape: Shape; mutate: (node: XmlNode, root: XmlNode) => boolean }>,
+  ): Slide | undefined {
+    const root = this.deck.slideXml(slideIndex);
+    if (!root || edits.length === 0) return undefined;
+
+    const targets: Array<{ node: XmlNode; mutate: (node: XmlNode, root: XmlNode) => boolean }> = [];
+    let part: string | undefined;
+    for (const { shape, mutate } of edits) {
+      const src = this.deck.sourceOf(shape);
+      if (!src || !this.deck.isEditable(slideIndex, shape)) continue;
+      targets.push({ node: src.node, mutate });
+      part = src.part;
+    }
+    if (part === undefined) return undefined;
+
+    const before = this.deck.snapshotPart(part);
+    let changed = false;
+    for (const t of targets) changed = t.mutate(t.node, root) || changed;
+    if (!changed) return undefined;
+    if (before !== undefined) this.history.push({ part, xml: before });
+
+    this.deck.markSlideDirty(slideIndex);
     const slide = this.deck.rebuildSlide(slideIndex);
     this.onChange?.(slideIndex);
     return slide;

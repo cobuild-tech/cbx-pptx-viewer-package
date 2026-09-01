@@ -59,7 +59,13 @@ export function renderTextBody(body: TextBody, deps: RenderDeps, flow = false): 
 
   if (deps.edit?.editable(body)) {
     box.setAttribute(EDIT_ATTR.body, deps.edit.key(body));
-    box.contentEditable = 'true';
+    // Editable and *being edited* are different states: the box is addressable
+    // as soon as the slide is editable, but typing into it only starts once the
+    // user has entered it, so a plain click can select the shape instead.
+    // Set as an attribute, not the property: the viewer finds the box it just
+    // opened with an attribute selector, and the two do not reflect in every
+    // DOM implementation.
+    if (deps.edit.textEditing?.(body) ?? true) box.setAttribute('contenteditable', 'true');
     // Without this the browser inserts <b>/<font> markup on its own shortcuts,
     // which reconciliation would have to unpick; the toolbar drives formatting.
     box.spellcheck = false;

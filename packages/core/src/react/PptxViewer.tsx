@@ -1,6 +1,12 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
-import { Viewer, type Deck, type RunFormat, type TextBoxOutline } from '../index.js';
+import {
+  Viewer,
+  type Deck,
+  type Shape,
+  type RunFormat,
+  type ZOrderMove,
+} from '../index.js';
 import { useDeck, type DeckSource } from './useDeck.js';
 import { EditorToolbar } from './EditorToolbar.js';
 
@@ -14,6 +20,14 @@ export interface PptxViewerHandle {
   commit(): void;
   /** Delete a slide (the current one by default). Editable mode only. */
   deleteSlide(index?: number): void;
+  /** Delete the selected shapes. Editable mode only. */
+  deleteShapes(): void;
+  /** Move the selected shape through the z-order. */
+  reorderShape(move: ZOrderMove): void;
+  /** Open the selected shape's text for typing. */
+  editText(): void;
+  /** The shapes currently selected on the stage. */
+  selectedShapes(): readonly Shape[];
   undo(): void;
   redo(): void;
   /** Re-zip the deck with all edits applied. */
@@ -47,10 +61,12 @@ export interface PptxViewerProps {
   /** Called after each committed edit, undo or redo. */
   onEdit?: (slideIndex: number) => void;
   /**
-   * How editable text boxes are outlined: `'hover'` (default), `'always'` to
-   * reveal every box at once, or `'none'`. Ignored unless `editable`.
+   * Select, move, resize, rotate, restack and delete shapes. Defaults to
+   * `editable`; pass `false` for text-only editing.
    */
-  textBoxOutline?: TextBoxOutline;
+  shapeEditing?: boolean;
+  /** Called when the set of selected shapes changes. */
+  onShapeSelectionChange?: (shapes: readonly Shape[]) => void;
 }
 
 export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function PptxViewer(
@@ -67,7 +83,8 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
     editable = false,
     editorToolbar = true,
     onEdit,
-    textBoxOutline = 'hover',
+    shapeEditing = true,
+    onShapeSelectionChange,
   },
   ref,
 ) {
@@ -77,6 +94,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
   const [index, setIndex] = useState(0);
   const [count, setCount] = useState(0);
   const [format, setFormat] = useState<RunFormat>({});
+  const [selectedCount, setSelectedCount] = useState(0);
   // The viewer owns undo/redo state; mirror it so the toolbar re-renders.
   const [editState, setEditState] = useState({
     canUndo: false,
@@ -94,7 +112,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
     onLoad?.(deck);
     const viewer = new Viewer(deck, stageRef.current, {
       editable,
-      textBoxOutline,
+      shapeEditing,
       filmstrip,
       ...(filmstripWidth !== undefined ? { filmstripWidth } : {}),
       onChange: (i, c) => {
@@ -115,6 +133,10 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
         onEdit?.(i);
       },
       onSelectionChange: setFormat,
+      onShapeSelectionChange: (shapes) => {
+        setSelectedCount(shapes.length);
+        onShapeSelectionChange?.(shapes);
+      },
     });
     viewerRef.current = viewer;
     return () => {
@@ -122,12 +144,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       viewerRef.current = null;
     };
     // The rail is part of the viewer's DOM layout, so toggling it rebuilds.
-  }, [deck, editable, filmstrip, filmstripWidth]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Changing the outline mode restyles in place — no need to rebuild the viewer.
-  useEffect(() => {
-    viewerRef.current?.setTextBoxOutline(textBoxOutline);
-  }, [textBoxOutline]);
+  }, [deck, editable, shapeEditing, filmstrip, filmstripWidth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useImperativeHandle(
     ref,
@@ -138,6 +155,13 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       applyFormat: (f: RunFormat) => viewerRef.current?.applyFormat(f),
       commit: () => viewerRef.current?.commitActive(),
       deleteSlide: (i?: number) => viewerRef.current?.deleteSlide(i),
+      deleteShapes: () => viewerRef.current?.deleteSelectedShapes(),
+      reorderShape: (move: ZOrderMove) => viewerRef.current?.reorderSelectedShape(move),
+      editText: () => {
+        const shape = viewerRef.current?.selectedShapes[0];
+        if (shape) viewerRef.current?.editText(shape);
+      },
+      selectedShapes: () => viewerRef.current?.selectedShapes ?? [],
       undo: () => viewerRef.current?.undo(),
       redo: () => viewerRef.current?.redo(),
       exportBlob: () => viewerRef.current?.exportBlob(),
@@ -170,6 +194,41 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
           hasEdits={editState.hasEdits}
           onExport={downloadEdits}
           exportLabel="Download .pptx"
+          extras={
+            shapeEditing && (
+              <>
+                <span style={{ opacity: selectedCount ? 1 : 0.45 }}>
+                  {selectedCount === 0
+                    ? 'No shape selected'
+                    : `${selectedCount} shape${selectedCount > 1 ? 's' : ''}`}
+                </span>
+                <button
+                  style={btn}
+                  disabled={selectedCount !== 1}
+                  title="Bring forward (Ctrl+])"
+                  onClick={() => viewerRef.current?.reorderSelectedShape('forward')}
+                >
+                  ↑
+                </button>
+                <button
+                  style={btn}
+                  disabled={selectedCount !== 1}
+                  title="Send backward (Ctrl+[)"
+                  onClick={() => viewerRef.current?.reorderSelectedShape('backward')}
+                >
+                  ↓
+                </button>
+                <button
+                  style={btn}
+                  disabled={selectedCount === 0}
+                  title="Delete shape (Del)"
+                  onClick={() => viewerRef.current?.deleteSelectedShapes()}
+                >
+                  Delete shape
+                </button>
+              </>
+            )
+          }
         />
       )}
       {/* The viewer fits the slide to this area (contain) and centres it. */}

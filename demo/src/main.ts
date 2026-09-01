@@ -5,7 +5,6 @@ import {
   createViewer,
   type Viewer,
   type RunFormat,
-  type TextBoxOutline,
 } from '@cobuildx.ai/office-viewer';
 
 const dropEl = document.getElementById('drop')!;
@@ -13,6 +12,10 @@ const infoEl = document.getElementById('info')!;
 const fileEl = document.getElementById('file') as HTMLInputElement;
 
 const editorEl = document.getElementById('editor') as HTMLDivElement;
+const selEl = document.getElementById('sel')!;
+const frontEl = document.getElementById('front') as HTMLButtonElement;
+const backEl = document.getElementById('back') as HTMLButtonElement;
+const delShapeEl = document.getElementById('delshape') as HTMLButtonElement;
 const stageEl = document.getElementById('stage')!;
 const posEl = document.getElementById('pos')!;
 const sizeEl = document.getElementById('size') as HTMLSelectElement;
@@ -20,7 +23,6 @@ const colorEl = document.getElementById('color') as HTMLInputElement;
 const undoEl = document.getElementById('undo') as HTMLButtonElement;
 const redoEl = document.getElementById('redo') as HTMLButtonElement;
 const downloadEl = document.getElementById('download') as HTMLButtonElement;
-const outlineEl = document.getElementById('outline') as HTMLSelectElement;
 
 for (const pt of [8, 10, 12, 14, 18, 24, 28, 32, 40, 54, 66, 80]) {
   sizeEl.add(new Option(String(pt), String(pt)));
@@ -47,12 +49,20 @@ function mountEditor(buf: ArrayBuffer): void {
   const deck = loadPptx(buf);
   viewer = createViewer(deck, stageEl, {
     editable: true,
-    textBoxOutline: outlineEl.value as TextBoxOutline,
     onChange: (i, c) => {
       posEl.textContent = `${i + 1} / ${c}`;
       syncButtons();
     },
     onEdit: syncButtons,
+    onShapeSelectionChange: (shapes) => {
+      selEl.textContent =
+        shapes.length === 0
+          ? 'no shape selected'
+          : shapes.length === 1
+            ? (shapes[0]!.name ?? shapes[0]!.kind)
+            : `${shapes.length} shapes`;
+      syncButtons();
+    },
     onSelectionChange: (f) => {
       for (const b of document.querySelectorAll<HTMLButtonElement>('#editbar [data-fmt]')) {
         const key = b.dataset.fmt as keyof RunFormat;
@@ -70,6 +80,10 @@ function syncButtons(): void {
   undoEl.disabled = !viewer?.canUndo;
   redoEl.disabled = !viewer?.canRedo;
   downloadEl.disabled = !viewer?.hasEdits;
+  const picked = viewer?.selectedShapes.length ?? 0;
+  frontEl.disabled = picked !== 1;
+  backEl.disabled = picked !== 1;
+  delShapeEl.disabled = picked === 0;
 }
 
 // Formatting must not steal focus, or the selection it applies to is gone.
@@ -84,9 +98,9 @@ sizeEl.addEventListener('change', () => viewer?.applyFormat({ sizePt: Number(siz
 colorEl.addEventListener('change', () =>
   viewer?.applyFormat({ colorHex: colorEl.value.slice(1).toUpperCase() }),
 );
-outlineEl.addEventListener('change', () =>
-  viewer?.setTextBoxOutline(outlineEl.value as TextBoxOutline),
-);
+frontEl.addEventListener('click', () => viewer?.reorderSelectedShape('forward'));
+backEl.addEventListener('click', () => viewer?.reorderSelectedShape('backward'));
+delShapeEl.addEventListener('click', () => viewer?.deleteSelectedShapes());
 undoEl.addEventListener('click', () => viewer?.undo());
 redoEl.addEventListener('click', () => viewer?.redo());
 document.getElementById('prev')!.addEventListener('click', () => viewer?.prev());
