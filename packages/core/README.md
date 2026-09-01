@@ -68,7 +68,7 @@ every other part is emitted from its original bytes.
 
 ### Components
 
-**`<PptxViewer src toolbar? editable? textBoxOutline? className? style? onLoad? onError? onSlideChange? onEdit? />`**
+**`<PptxViewer src toolbar? filmstrip? filmstripWidth? editable? textBoxOutline? className? style? onLoad? onError? onSlideChange? onEdit? />`**
 Renders a `.pptx` deck with built-in prev/next navigation. Pass a ref to get `{ next(), prev(), goTo(index), applyFormat(), undo(), redo(), exportBlob(), deck }`.
 
 **`<DocxViewer src toolbar? editable? editorToolbar? className? style? onLoad? onError? onPageChange? onEdit? />`**
@@ -96,6 +96,7 @@ const { deck, loading, error } = useDeck(file); // re-loads on `file` change, di
 import { loadPptx, createViewer } from '@cobuildx.ai/office-viewer';
 
 const deck = loadPptx(arrayBuffer);
+// Thumbnail rail on the left, current slide on the right (filmstrip: false to drop it).
 const viewer = createViewer(deck, containerEl, { fit: 'contain' });
 viewer.next();
 viewer.goTo(3);
@@ -141,7 +142,7 @@ Always call `dispose()` on the deck/document/workbook when you're done with it �
 
 **Editing** (`editable`)
 
-- PPTX: the slide's own text bodies, including table cells — paragraph split/merge, character formatting, undo/redo, export. Text inherited from a layout or master renders but stays read-only, since editing it would change every slide that shares it. Shape geometry, images and charts are not editable.
+- PPTX: the slide's own text bodies, including table cells — paragraph split/merge, character formatting, undo/redo, export. Text inherited from a layout or master renders but stays read-only, since editing it would change every slide that shares it. Whole slides can be deleted with `viewer.deleteSlide(index?)` (the deck must keep at least one). Shape geometry, images and charts are not editable.
 - DOCX: body text including table cells. Header and footer text, generated list markers and field results stay read-only. Edit mode renders the document as one continuous column instead of fixed pages (Word reflows on open, so pagination is a display concern only) and re-paginates on exit.
 - XLSX: cell values, formulas and cell formatting (bold/italic/underline/strike, size, font, text colour, fill, alignment, wrap, number format), with Excel-like keyboard behaviour — arrows, Enter, Tab, F2, Delete, shift-select. Formulas are stored but not evaluated: the workbook is flagged so Excel recalculates on open. Cells on a protected sheet, cells covered by a merge, and array/shared-formula hosts stay read-only. Inserting or deleting rows and columns is not supported.
 

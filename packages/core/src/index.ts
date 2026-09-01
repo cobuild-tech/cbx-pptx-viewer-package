@@ -8,6 +8,7 @@
  *
  * PPTX usage:
  *   const deck = loadPptx(arrayBuffer);
+ *   // PowerPoint's layout: thumbnail rail left, current slide right.
  *   const viewer = createViewer(deck, containerEl, { fit: 'contain' });
  *   viewer.next(); viewer.goTo(3);
  *   // when done: viewer.destroy(); deck.dispose();
@@ -15,6 +16,7 @@
  * PPTX editing (text):
  *   const viewer = createViewer(deck, containerEl, { editable: true });
  *   viewer.applyFormat({ bold: true });   // formats the current selection
+ *   viewer.deleteSlide();                // removes the slide on screen
  *   viewer.undo(); viewer.redo();
  *   const blob = viewer.exportBlob();     // a valid .pptx with the edits
  *
@@ -39,6 +41,7 @@
 // ─── PPTX ────────────────────────────────────────────────────────────────────
 export { Deck, Deck as loadDeck } from './pptx/deck/deck.js';
 export { Viewer, createViewer, type ViewerOptions } from './pptx/viewer/viewer.js';
+export { Filmstrip, type FilmstripOptions } from './pptx/viewer/filmstrip.js';
 export { renderSlide, type RenderDeps } from './pptx/render/dom.js';
 export { installDeckFonts, type FontInstallation } from './pptx/render/fonts.js';
 export { installWebFonts, collectFontFamilies, type WebFontOptions } from './pptx/render/webfonts.js';
@@ -46,6 +49,11 @@ export { installWebFonts, collectFontFamilies, type WebFontOptions } from './ppt
 // PPTX text editing (opt in with `editable` on the viewer).
 export { EditSession, type EditSessionOptions } from './pptx/edit/session.js';
 export { EditContext } from './pptx/edit/context.js';
+export {
+  deleteSlide,
+  planSlideDeletion,
+  type SlideDeletionPlan,
+} from './pptx/edit/slideOps.js';
 export { reconcileTextBody } from './pptx/edit/reconcile.js';
 export { writeTextBody, type ParaEdit, type Segment } from './pptx/edit/xmlWrite.js';
 export { readFormat } from './pptx/edit/format.js';
@@ -61,7 +69,8 @@ export {
 } from './oxml/edit/selection.js';
 export { mergeFormat, isEmptyFormat, type RunFormat } from './oxml/edit/format.js';
 export { installEditStyles, type TextBoxOutline } from './oxml/edit/styles.js';
-export { History, type Snapshot } from './oxml/edit/history.js';
+export { installStyleSheet } from './oxml/stylesheet.js';
+export { History, type Snapshot, type PartReader } from './oxml/edit/history.js';
 export type { ModelSource } from './pptx/deck/deck.js';
 export type { EditRenderContext } from './pptx/render/primitives.js';
 

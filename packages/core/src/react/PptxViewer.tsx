@@ -12,6 +12,8 @@ export interface PptxViewerHandle {
   applyFormat(format: RunFormat): void;
   /** Commit whatever text body is focused, without waiting for blur. */
   commit(): void;
+  /** Delete a slide (the current one by default). Editable mode only. */
+  deleteSlide(index?: number): void;
   undo(): void;
   redo(): void;
   /** Re-zip the deck with all edits applied. */
@@ -24,6 +26,12 @@ export interface PptxViewerProps {
   src: DeckSource;
   /** Show the built-in navigation toolbar. Default true. */
   toolbar?: boolean;
+  /**
+   * Show the thumbnail rail down the left, PowerPoint-style. Default true.
+   */
+  filmstrip?: boolean;
+  /** Width of the thumbnail rail in CSS px. Default 200. */
+  filmstripWidth?: number;
   className?: string;
   style?: CSSProperties;
   onLoad?: (deck: Deck) => void;
@@ -49,6 +57,8 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
   {
     src,
     toolbar = true,
+    filmstrip = true,
+    filmstripWidth,
     className,
     style,
     onLoad,
@@ -68,7 +78,12 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
   const [count, setCount] = useState(0);
   const [format, setFormat] = useState<RunFormat>({});
   // The viewer owns undo/redo state; mirror it so the toolbar re-renders.
-  const [editState, setEditState] = useState({ canUndo: false, canRedo: false, hasEdits: false });
+  const [editState, setEditState] = useState({
+    canUndo: false,
+    canRedo: false,
+    hasEdits: false,
+    canDelete: false,
+  });
 
   useEffect(() => {
     if (error) onError?.(error);
@@ -80,9 +95,14 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
     const viewer = new Viewer(deck, stageRef.current, {
       editable,
       textBoxOutline,
+      filmstrip,
+      ...(filmstripWidth !== undefined ? { filmstripWidth } : {}),
       onChange: (i, c) => {
         setIndex(i);
         setCount(c);
+        // Deleting the second-to-last slide makes the last one undeletable, so
+        // this has to track navigation as well as edits.
+        setEditState((prev) => ({ ...prev, canDelete: viewer.canDeleteSlide() }));
         onSlideChange?.(i, c);
       },
       onEdit: (i) => {
@@ -90,6 +110,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
           canUndo: viewer.canUndo,
           canRedo: viewer.canRedo,
           hasEdits: viewer.hasEdits,
+          canDelete: viewer.canDeleteSlide(),
         });
         onEdit?.(i);
       },
@@ -100,7 +121,8 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       viewer.destroy();
       viewerRef.current = null;
     };
-  }, [deck, editable]); // eslint-disable-line react-hooks/exhaustive-deps
+    // The rail is part of the viewer's DOM layout, so toggling it rebuilds.
+  }, [deck, editable, filmstrip, filmstripWidth]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Changing the outline mode restyles in place — no need to rebuild the viewer.
   useEffect(() => {
@@ -115,6 +137,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       goTo: (i: number) => viewerRef.current?.goTo(i),
       applyFormat: (f: RunFormat) => viewerRef.current?.applyFormat(f),
       commit: () => viewerRef.current?.commitActive(),
+      deleteSlide: (i?: number) => viewerRef.current?.deleteSlide(i),
       undo: () => viewerRef.current?.undo(),
       redo: () => viewerRef.current?.redo(),
       exportBlob: () => viewerRef.current?.exportBlob(),
@@ -170,6 +193,20 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
           >
             Next ›
           </button>
+          {editable && (
+            <button
+              style={{ ...btn, marginLeft: 12 }}
+              onClick={() => viewerRef.current?.deleteSlide()}
+              disabled={!editState.canDelete}
+              title={
+                editState.canDelete
+                  ? 'Delete this slide'
+                  : 'A presentation must keep at least one slide'
+              }
+            >
+              Delete slide
+            </button>
+          )}
         </div>
       )}
     </div>

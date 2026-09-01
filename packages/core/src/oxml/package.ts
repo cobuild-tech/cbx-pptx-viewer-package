@@ -9,7 +9,17 @@
  * knowledge lives here.
  */
 import { unzipSync, zipSync, strToU8 } from 'fflate';
-import { parseXml, serializeXml, children, attr, type XmlNode } from './xml.js';
+import {
+  parseXml,
+  serializeXml,
+  children,
+  attr,
+  localName,
+  createElement,
+  type XmlNode,
+} from './xml.js';
+
+const CONTENT_TYPES_PART = '[Content_Types].xml';
 
 export interface Relationship {
   id: string;
@@ -64,6 +74,8 @@ export class OpcPackage {
   private readonly edited = new Map<string, Uint8Array>();
   /** Parts whose cached XmlNode was mutated in place; re-serialized on export. */
   private readonly dirty = new Set<string>();
+  /** Parts deleted from the package; omitted on export. */
+  private readonly removed = new Set<string>();
 
   private constructor(files: Record<string, Uint8Array>) {
     this.files = files;
@@ -79,12 +91,14 @@ export class OpcPackage {
   /** True if the package contains the given part. */
   has(partPath: string): boolean {
     const norm = normalizePath(partPath);
+    if (this.removed.has(norm)) return false;
     return norm in this.files || this.edited.has(norm);
   }
 
   /** Raw bytes of a part, or undefined if absent. Edited overlay wins. */
   getBytes(partPath: string): Uint8Array | undefined {
     const norm = normalizePath(partPath);
+    if (this.removed.has(norm)) return undefined;
     return this.edited.get(norm) ?? this.files[norm];
   }
 
@@ -116,7 +130,9 @@ export class OpcPackage {
     this.edited.set(norm, typeof data === 'string' ? strToU8(data) : data);
     this.xmlCache.delete(norm);
     this.dirty.delete(norm);
+    this.removed.delete(norm);
     this.relsCache.clear(); // rels resolution may depend on the replaced part
+    if (norm === CONTENT_TYPES_PART) this.readContentTypes();
   }
 
   /**
@@ -129,12 +145,12 @@ export class OpcPackage {
 
   /** True if any part has been edited (mutated node or replaced bytes). */
   get hasEdits(): boolean {
-    return this.dirty.size > 0 || this.edited.size > 0;
+    return this.dirty.size > 0 || this.edited.size > 0 || this.removed.size > 0;
   }
 
   /** Part paths that differ from the originally-loaded package. */
   editedParts(): string[] {
-    return [...new Set<string>([...this.dirty, ...this.edited.keys()])];
+    return [...new Set<string>([...this.dirty, ...this.edited.keys(), ...this.removed])];
   }
 
   /** Revert a part to its originally-loaded bytes (drops edits and re-parses). */
@@ -142,8 +158,83 @@ export class OpcPackage {
     const norm = normalizePath(partPath);
     this.edited.delete(norm);
     this.dirty.delete(norm);
+    this.removed.delete(norm);
     this.xmlCache.delete(norm);
     this.relsCache.clear();
+  }
+
+
+  /**
+   * Remove a part from the package, along with its relationships part and its
+   * `[Content_Types].xml` override. The part stops being readable immediately
+   * and is omitted from {@link toBytes}; `setPart` on the same path brings it
+   * back (which is how undo restores a deletion).
+   *
+   * This does not touch relationships *pointing at* the part — the caller owns
+   * that, since only it knows which source part referenced it.
+   */
+  deletePart(partPath: string): void {
+    const norm = normalizePath(partPath);
+    this.removed.add(norm);
+    this.edited.delete(norm);
+    this.dirty.delete(norm);
+    this.xmlCache.delete(norm);
+    this.setContentTypeOverride(norm, undefined);
+
+    const relsPart = relsPathFor(norm);
+    if (this.has(relsPart)) {
+      this.removed.add(relsPart);
+      this.edited.delete(relsPart);
+      this.dirty.delete(relsPart);
+      this.xmlCache.delete(relsPart);
+    }
+    this.relsCache.clear();
+  }
+
+  /**
+   * Drop one relationship declared by a source part ('' for the package root).
+   * Mutates the .rels part in place and marks it dirty.
+   */
+  removeRelationship(partPath: string, relId: string): boolean {
+    const norm = partPath === '' ? '' : normalizePath(partPath);
+    const relsPart = relsPathFor(norm);
+    const relsXml = this.getXml(relsPart);
+    if (!relsXml) return false;
+    const before = relsXml.children.length;
+    relsXml.children = relsXml.children.filter(
+      (c) => !(localName(c.name) === 'Relationship' && attr(c, 'Id') === relId),
+    );
+    if (relsXml.children.length === before) return false;
+    this.markDirty(relsPart);
+    this.relsCache.delete(norm);
+    return true;
+  }
+
+  /**
+   * Set or (with `undefined`) remove a part's `[Content_Types].xml` override,
+   * keeping the parsed table and the XML in step.
+   */
+  setContentTypeOverride(partPath: string, contentType: string | undefined): void {
+    const name = '/' + normalizePath(partPath);
+    const xml = this.getXml(CONTENT_TYPES_PART);
+    if (!xml) return;
+    const existing = xml.children.find(
+      (c) => localName(c.name) === 'Override' && attr(c, 'PartName') === name,
+    );
+    if (contentType === undefined) {
+      if (!existing) return;
+      xml.children = xml.children.filter((c) => c !== existing);
+      this.overrides.delete(name);
+    } else if (existing) {
+      existing.attrs['ContentType'] = contentType;
+      this.overrides.set(name, contentType);
+    } else {
+      xml.children.push(
+        createElement('Override', { PartName: name, ContentType: contentType }),
+      );
+      this.overrides.set(name, contentType);
+    }
+    this.markDirty(CONTENT_TYPES_PART);
   }
 
   /**
@@ -168,6 +259,7 @@ export class OpcPackage {
     const out: Record<string, Uint8Array> = {};
     const names = new Set<string>([...Object.keys(this.files), ...this.edited.keys()]);
     for (const name of names) {
+      if (this.removed.has(name)) continue;
       if (this.dirty.has(name)) {
         const node = this.xmlCache.get(name);
         if (node) {
@@ -193,12 +285,15 @@ export class OpcPackage {
 
   /** All part paths in the package, sorted. */
   listParts(): string[] {
-    return Object.keys(this.files).sort();
+    const names = new Set<string>([...Object.keys(this.files), ...this.edited.keys()]);
+    for (const name of this.removed) names.delete(name);
+    return [...names].sort();
   }
 
   /** Content type of a part: overrides win, then defaults by extension. */
   contentType(partPath: string): string | undefined {
     const norm = normalizePath(partPath);
+    if (this.removed.has(norm)) return undefined;
     const override = this.overrides.get('/' + norm);
     if (override) return override;
     const dot = norm.lastIndexOf('.');
@@ -264,8 +359,10 @@ export class OpcPackage {
   }
 
   private readContentTypes(): void {
-    const xml = this.getXml('[Content_Types].xml');
+    const xml = this.getXml(CONTENT_TYPES_PART);
     if (!xml) return;
+    this.overrides = new Map();
+    this.defaults = new Map();
     for (const d of children(xml, 'Default')) {
       const ext = attr(d, 'Extension');
       const ct = attr(d, 'ContentType');
