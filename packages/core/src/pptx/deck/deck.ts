@@ -12,6 +12,8 @@ import { child, children, attr, attrNum, type XmlNode } from '../../oxml/xml.js'
 import { emuToPx } from '../../oxml/units.js';
 import type { Slide, SlideSize, EmbeddedFont } from '../model.js';
 import { buildSlide } from '../slides/slide.js';
+import { deleteSlide as deleteSlideParts, planSlideDeletion } from '../edit/slideOps.js';
+import type { Snapshot } from '../../oxml/edit/history.js';
 
 const UNDECODABLE_IMAGE_TYPES = new Set(['image/x-emf', 'image/x-wmf', 'image/emf', 'image/wmf']);
 
@@ -38,11 +40,14 @@ export class Deck {
    * the slide when it is rebuilt.
    */
   private sources = new WeakMap<object, ModelSource>();
-  private readonly slideParts: string[];
-  private readonly defaultTextStyle: XmlNode | undefined;
+  /** Slide part paths in running order — mutated when slides are deleted. */
+  private slideParts: string[];
+  private defaultTextStyle: XmlNode | undefined;
+  private readonly presPart: string;
 
   private constructor(
     pkg: OpcPackage,
+    presPart: string,
     size: SlideSize,
     slides: Slide[],
     embeddedFonts: EmbeddedFont[],
@@ -50,6 +55,7 @@ export class Deck {
     defaultTextStyle: XmlNode | undefined,
   ) {
     this.pkg = pkg;
+    this.presPart = presPart;
     this.size = size;
     this.slides = slides;
     this.embeddedFonts = embeddedFonts;
@@ -72,11 +78,16 @@ export class Deck {
     const defaultTextStyle = child(presXml, 'defaultTextStyle');
 
     const embeddedFonts = readEmbeddedFonts(pkg, presPart, presXml);
-    const deck = new Deck(pkg, size, [], embeddedFonts, slideParts, defaultTextStyle);
+    const deck = new Deck(pkg, presPart, size, [], embeddedFonts, slideParts, defaultTextStyle);
     slideParts.forEach((part, index) => {
       deck.slides.push(deck.build(part, index));
     });
     return deck;
+  }
+
+  /** Path of the presentation part — the running order lives here. */
+  get presentationPart(): string {
+    return this.presPart;
   }
 
   // ─── Editing ───────────────────────────────────────────────────────────────
@@ -120,6 +131,61 @@ export class Deck {
     return rebuilt;
   }
 
+  /**
+   * Re-read the running order from presentation.xml and rebuild every slide.
+   *
+   * Needed after a *structural* change (a slide deleted), where the slide list
+   * itself moved rather than one slide's contents. Like {@link rebuildSlide},
+   * this invalidates every model object previously handed out.
+   */
+  rebuild(): void {
+    const presXml = this.pkg.getXml(this.presPart);
+    this.defaultTextStyle = presXml ? child(presXml, 'defaultTextStyle') : undefined;
+    this.slideParts = presXml ? readSlideOrder(this.pkg, this.presPart, presXml) : [];
+    // A fresh source map: the old entries point at nodes of slides that may no
+    // longer exist, and stale identity here would silently mis-address edits.
+    this.sources = new WeakMap();
+    this.slides.length = 0;
+    this.slideParts.forEach((part, index) => {
+      this.slides.push(this.build(part, index));
+    });
+  }
+
+  /**
+   * True if the slide at `index` can be deleted. A presentation must keep at
+   * least one slide — PowerPoint refuses to open a deck with an empty
+   * `<p:sldIdLst>`.
+   */
+  canDeleteSlide(index: number): boolean {
+    return this.slides.length > 1 && index >= 0 && index < this.slideParts.length;
+  }
+
+  /**
+   * Every part a deletion of slide `index` would touch, as snapshots of their
+   * current state. Take these *before* calling {@link deleteSlide} to make the
+   * deletion undoable; parts that will be removed are snapshotted with their
+   * content, parts that do not yet exist are marked absent.
+   */
+  slideDeletionSnapshots(index: number): Snapshot[] {
+    const part = this.slideParts[index];
+    if (part === undefined) return [];
+    const plan = planSlideDeletion(this.pkg, this.presPart, part);
+    if (!plan) return [];
+    return [...plan.changed, ...plan.removed].map((p) => this.snapshot(p));
+  }
+
+  /**
+   * Delete the slide at `index` and rebuild the deck. Returns false (having
+   * changed nothing) if the slide cannot be deleted.
+   */
+  deleteSlide(index: number): boolean {
+    if (!this.canDeleteSlide(index)) return false;
+    const part = this.slideParts[index]!;
+    if (!deleteSlideParts(this.pkg, this.presPart, part)) return false;
+    this.rebuild();
+    return true;
+  }
+
   /** Mark a slide's part as mutated so export re-serializes it. */
   markSlideDirty(index: number): void {
     const part = this.slideParts[index];
@@ -136,9 +202,25 @@ export class Deck {
     return this.pkg.serializePart(part);
   }
 
+  /**
+   * A part's current state as an undo {@link Snapshot}, including the case where
+   * the part does not exist — which {@link snapshotPart} cannot express and
+   * which redoing a slide deletion depends on.
+   */
+  snapshot(part: string): Snapshot {
+    const xml = this.pkg.serializePart(part);
+    return xml === undefined ? { part, xml: '', absent: true } : { part, xml };
+  }
+
   /** Restore a part from a snapshot taken by {@link snapshotPart}. */
   restorePart(part: string, xml: string): void {
     this.pkg.setPart(part, xml);
+  }
+
+  /** Apply an undo {@link Snapshot}: write the part back, or delete it again. */
+  restore(snapshot: Snapshot): void {
+    if (snapshot.absent) this.pkg.deletePart(snapshot.part);
+    else this.pkg.setPart(snapshot.part, snapshot.xml);
   }
 
   /** Re-zip the deck, edits included, as .pptx bytes. */

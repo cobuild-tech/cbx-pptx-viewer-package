@@ -40,6 +40,28 @@ export class EditSession {
     return this.deck.hasEdits;
   }
 
+  /** True if the slide at `index` may be deleted (a deck must keep one slide). */
+  canDeleteSlide(index: number): boolean {
+    return this.deck.canDeleteSlide(index);
+  }
+
+  /**
+   * Delete a slide and rebuild the deck. Unlike a text edit this spans several
+   * parts — presentation.xml, its relationships, [Content_Types].xml and the
+   * slide part itself — so the whole set is snapshotted as one undo entry.
+   *
+   * Returns false, having changed nothing, if the slide cannot be deleted.
+   */
+  deleteSlide(index: number): boolean {
+    if (!this.deck.canDeleteSlide(index)) return false;
+    const before = this.deck.slideDeletionSnapshots(index);
+    if (before.length === 0) return false;
+    if (!this.deck.deleteSlide(index)) return false;
+    this.history.push(before);
+    this.onChange?.(Math.min(index, this.deck.slides.length - 1));
+    return true;
+  }
+
   /**
    * True if this text body may be edited — it must belong to the slide's own
    * part, not to an inherited layout or master.
@@ -70,16 +92,31 @@ export class EditSession {
   }
 
   undo(): Slide | undefined {
-    return this.restore(this.history.undo((p) => this.deck.snapshotPart(p)));
+    return this.restore(this.history.undo((p) => this.deck.snapshot(p)));
   }
 
   redo(): Slide | undefined {
-    return this.restore(this.history.redo((p) => this.deck.snapshotPart(p)));
+    return this.restore(this.history.redo((p) => this.deck.snapshot(p)));
   }
 
   private restore(snapshots: Snapshot[] | undefined): Slide | undefined {
     if (!snapshots || snapshots.length === 0) return undefined;
-    for (const snap of snapshots) this.deck.restorePart(snap.part, snap.xml);
+    // A change set that touches presentation.xml moved the running order, so the
+    // whole deck has to be re-read; anything else is one slide's own XML.
+    const structural = snapshots.some((s) => s.part === this.deck.presentationPart);
+    for (const snap of snapshots) this.deck.restore(snap);
+
+    if (structural) {
+      this.deck.rebuild();
+      // Undoing a deletion puts a slide part back, so land the viewer on it.
+      // Redoing one leaves no slide part in the set, and the caller clamps its
+      // own position instead.
+      const restored = new Set(snapshots.filter((s) => !s.absent).map((s) => s.part));
+      const slide = this.deck.slides.find((s) => restored.has(s.part));
+      this.onChange?.(slide ? slide.index : 0);
+      return slide;
+    }
+
     const index = this.deck.slides.findIndex((s) => s.part === snapshots[0]!.part);
     if (index === -1) return undefined;
     // setPart drops the cached parse, so this re-reads the restored XML.

@@ -103,7 +103,7 @@ packages/core/src/
     color.ts        scheme-color map + modifier transforms
     model.ts        render-agnostic intermediate representation
     render/         model -> HTML/CSS/SVG (dom.ts), font install, primitives
-    viewer/         navigation, fit-to-viewport scaling, keyboard
+    viewer/         thumbnail rail, navigation, fit-to-viewport scaling, keyboard
 
   docx/             Word feature slices (same shape as pptx)
     document/       top-level loader; body parsing
@@ -267,7 +267,10 @@ won't load there.
 - **SmartArt / diagrams**: cached `dsp:drawing` fast path, plus a data-model
   fallback that lays out nodes by layout family (cycle/process/list/hierarchy/
   pyramid) so the real content shows instead of a placeholder
-- Navigation: prev/next/goto, keyboard, fit-to-viewport scaling
+- PowerPoint's layout: a scrolling thumbnail rail on the left, the current
+  slide on the stage to its right (`filmstrip: false` for a bare stage)
+- Navigation: prev/next/goto, click a thumbnail, keyboard, fit-to-viewport
+  scaling
 
 ### DOCX
 
@@ -290,6 +293,8 @@ won't load there.
 - **PPTX**: the slide's own text bodies, incl. table cells — split/merge
   paragraphs, character formatting, undo/redo, export. Layout/master text is
   read-only, since editing it would change every slide that shares it.
+  Whole slides can be deleted (`viewer.deleteSlide()`), which also drops the
+  slide's notes and every reference to it; a deck must keep one slide.
 - **DOCX**: body text incl. table cells. Headers/footers, list markers and field
   results are read-only. Edit mode renders one continuous column and
   re-paginates on exit (pagination isn't stored in a `.docx` anyway).
@@ -302,8 +307,9 @@ won't load there.
 
 ## Known limitations
 
-- Editing covers text and cell content only — shape geometry, images, charts,
-  and inserting/deleting spreadsheet rows and columns are not editable
+- Editing covers text and cell content, plus deleting whole PPTX slides —
+  shape geometry, images, charts, and inserting/deleting spreadsheet rows and
+  columns are not editable
 - Formulas are never evaluated; the workbook is flagged so Excel recalculates
   when it opens the exported file
 - PPTX: only the implemented preset geometries are exact; the rest fall back to

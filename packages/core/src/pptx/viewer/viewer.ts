@@ -2,11 +2,14 @@
  * Viewer controller: mounts a {@link Deck} into a container and renders one
  * slide at a time.
  *
- * Sizing: by default the slide is fit to the container like PowerPoint's
- * slideshow — uniformly scaled to the largest size that fits both the
- * container's width and height, then centred (`fit: 'contain'`). Pass
- * `fit: 'width'` for the embedded-document style that fills the width and lets
- * the page scroll vertically.
+ * Layout: PowerPoint's — a scrolling thumbnail rail down the left, the current
+ * slide on the stage to its right. Pass `filmstrip: false` for the bare stage.
+ *
+ * Sizing: by default the slide is fit to the stage like PowerPoint's
+ * slideshow — uniformly scaled to the largest size that fits both the stage's
+ * width and height, then centred (`fit: 'contain'`). Pass `fit: 'width'` for
+ * the embedded-document style that fills the width and lets the page scroll
+ * vertically.
  *
  * On load it installs any fonts embedded in the deck (FontFace) and re-renders
  * once they're ready, so text reflows in the genuine font.
@@ -24,6 +27,7 @@ import { readRunFormat } from '../edit/format.js';
 import type { RunFormat } from '../../oxml/edit/format.js';
 import { EDIT_ATTR } from '../text/render.js';
 import type { TextBody } from '../model.js';
+import { Filmstrip } from './filmstrip.js';
 
 export interface ViewerOptions {
   startIndex?: number;
@@ -37,6 +41,13 @@ export interface ViewerOptions {
   fit?: 'contain' | 'width';
   /** Called whenever the current slide index changes. */
   onChange?: (index: number, count: number) => void;
+  /**
+   * Show the thumbnail rail down the left, PowerPoint-style. Default true; pass
+   * `false` for a bare stage (an embed with its own navigation, say).
+   */
+  filmstrip?: boolean;
+  /** Width of the thumbnail rail in CSS px. Default 200. */
+  filmstripWidth?: number;
   /**
    * Fetch the deck's fonts (and metric-compatible substitutes for Office fonts)
    * from Google Fonts when they aren't available locally, so text wraps as it
@@ -65,7 +76,14 @@ export interface ViewerOptions {
 export class Viewer {
   private readonly deck: Deck;
   private readonly container: HTMLElement;
+  /**
+   * The area the slide is scaled into. Its own element when the filmstrip is
+   * showing (the rail is its flex sibling), otherwise the container itself —
+   * so a viewer without a rail keeps exactly the DOM it always had.
+   */
+  private readonly stage: HTMLElement;
   private readonly holder: HTMLDivElement;
+  private strip: Filmstrip | null = null;
   private readonly onChange: ViewerOptions['onChange'];
   private readonly fit: 'contain' | 'width';
   private index = 0;
@@ -101,18 +119,44 @@ export class Viewer {
 
     container.style.position = 'relative';
 
-    // The holder fills the container; the slide is positioned/scaled within it.
+    if (options.filmstrip !== false) {
+      container.style.display = 'flex';
+      container.style.flexDirection = 'row';
+      container.style.alignItems = 'stretch';
+      this.strip = new Filmstrip(container.ownerDocument, {
+        slides: () => this.deck.slides,
+        size: deck.size,
+        imageUrl: (p) => this.deck.imageUrl(p),
+        onSelect: (i) => this.goTo(i),
+        ...(options.filmstripWidth !== undefined ? { width: options.filmstripWidth } : {}),
+      });
+      container.appendChild(this.strip.el);
+
+      const stage = document.createElement('div');
+      stage.style.position = 'relative';
+      stage.style.flex = '1 1 auto';
+      // Without this a wide slide would push the flex item past the container
+      // instead of scaling down into it, and the rail would be squeezed out.
+      stage.style.minWidth = '0';
+      stage.style.height = this.fit === 'contain' ? '100%' : 'auto';
+      container.appendChild(stage);
+      this.stage = stage;
+    } else {
+      this.stage = container;
+    }
+
+    // The holder fills the stage; the slide is positioned/scaled within it.
     this.holder = document.createElement('div');
     this.holder.style.position = 'relative';
     this.holder.style.width = '100%';
     this.holder.style.height = this.fit === 'contain' ? '100%' : 'auto';
     this.holder.style.margin = '0 auto';
-    container.appendChild(this.holder);
+    this.stage.appendChild(this.holder);
 
     if (options.keyboard !== false) this.enableKeyboard();
     if (this.editable) this.enableEditing();
     this.resizeObserver = new ResizeObserver(() => this.applyScale());
-    this.resizeObserver.observe(container);
+    this.resizeObserver.observe(this.stage);
 
     // Install the deck's fonts — embedded faces plus, for fonts not available
     // locally, substitutes fetched from Google Fonts — then re-render so text
@@ -130,7 +174,11 @@ export class Viewer {
       },
     };
     this.fonts.ready.then(() => {
-      if (this.slideEl) this.goTo(this.index);
+      if (!this.slideEl) return;
+      // Text reflows once the real metrics land, so the thumbnails are as stale
+      // as the stage is.
+      this.strip?.rebuild();
+      this.goTo(this.index);
     });
 
     this.goTo(options.startIndex ?? 0);
@@ -163,6 +211,7 @@ export class Viewer {
     this.slideEl = el;
     this.holder.appendChild(el);
     this.applyScale();
+    this.strip?.setActive(this.index);
     this.onChange?.(this.index, this.count);
   }
 
@@ -181,7 +230,7 @@ export class Viewer {
   private applyScale(): void {
     if (!this.slideEl) return;
     const { wPx, hPx } = this.deck.size;
-    const cw = this.container.clientWidth || wPx;
+    const cw = this.stage.clientWidth || wPx;
 
     if (this.fit === 'width') {
       const scale = cw / wPx;
@@ -193,7 +242,7 @@ export class Viewer {
     }
 
     // contain: largest scale that fits both width and height, then centre.
-    const ch = this.container.clientHeight || hPx;
+    const ch = this.stage.clientHeight || hPx;
     const scale = Math.min(cw / wPx, ch / hPx);
     this.slideEl.style.transform = `scale(${scale})`;
     this.slideEl.style.left = `${Math.max(0, (cw - wPx * scale) / 2)}px`;
@@ -206,6 +255,13 @@ export class Viewer {
       // Arrows, space and Home/End all mean something else inside text. Without
       // this an editor would jump slides mid-word.
       if (this.isEditingTarget(e.target)) return;
+      // Delete removes a slide only with the rail focused — the same scoping
+      // PowerPoint uses, so the key can't destroy a slide from the stage.
+      if ((e.key === 'Delete' || e.key === 'Backspace') && this.isFilmstripTarget(e.target)) {
+        e.preventDefault();
+        this.deleteSlide();
+        return;
+      }
       switch (e.key) {
         case 'ArrowRight':
         case 'ArrowDown':
@@ -231,6 +287,11 @@ export class Viewer {
       }
     };
     this.container.addEventListener('keydown', this.keyHandler);
+  }
+
+  /** True if the event target sits inside the thumbnail rail. */
+  private isFilmstripTarget(target: EventTarget | null): boolean {
+    return !!this.strip && target instanceof Node && this.strip.el.contains(target);
   }
 
   /** True if the event target sits inside an editable text body. */
@@ -275,6 +336,7 @@ export class Viewer {
     if (!slide) return false;
     // Re-render so the committed XML — not the browser's improvised markup — is
     // what the user is looking at.
+    this.strip?.refresh(this.index);
     this.goTo(this.index);
     return true;
   }
@@ -309,14 +371,52 @@ export class Viewer {
     return this.session?.canRedo ?? false;
   }
 
+  /**
+   * True if the current slide (or `index`) can be deleted. A deck must keep at
+   * least one slide.
+   */
+  canDeleteSlide(index = this.index): boolean {
+    return this.session?.canDeleteSlide(index) ?? false;
+  }
+
+  /**
+   * Delete a slide and show whichever slide takes its place (the last one, if
+   * the deleted slide was last). Undoable. Returns false if nothing was deleted.
+   */
+  deleteSlide(index = this.index): boolean {
+    if (!this.session) return false;
+    // Anything half-typed in a text body belongs in the deck before the running
+    // order changes underneath it.
+    this.commitActive();
+    if (!this.session.deleteSlide(index)) return false;
+    this.editCtx?.reset();
+    // Every slide after the deleted one shifted, so the rail is rebuilt whole
+    // rather than patched.
+    this.strip?.rebuild();
+    this.goTo(Math.min(index, this.count - 1));
+    return true;
+  }
+
   undo(): void {
-    const slide = this.session?.undo();
-    if (slide) this.goTo(slide.index);
+    if (!this.session?.canUndo) return;
+    this.afterRestore(this.session.undo()?.index);
   }
 
   redo(): void {
-    const slide = this.session?.redo();
-    if (slide) this.goTo(slide.index);
+    if (!this.session?.canRedo) return;
+    this.afterRestore(this.session.redo()?.index);
+  }
+
+  /**
+   * Land the viewer after an undo/redo. A change in slide count means the
+   * running order moved, so the rail is rebuilt; otherwise one slide's content
+   * changed and only its thumbnail is stale.
+   */
+  private afterRestore(landed: number | undefined): void {
+    const target = landed ?? Math.min(this.index, this.count - 1);
+    if (this.strip && this.strip.count !== this.count) this.strip.rebuild();
+    else this.strip?.refresh(target);
+    this.goTo(target);
   }
 
   /** True if the deck has unsaved edits. */
@@ -344,6 +444,11 @@ export class Viewer {
     this.disposeStyles?.();
     if (this.slideEl) this.slideEl.remove();
     this.slideEl = null;
+    this.strip?.destroy();
+    this.strip = null;
+    // The stage is ours only when a rail forced a two-column layout; otherwise
+    // it is the caller's container and stays put.
+    if (this.stage !== this.container) this.stage.remove();
   }
 }
 

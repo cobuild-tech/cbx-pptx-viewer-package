@@ -15,6 +15,24 @@
 export interface Snapshot {
   part: string;
   xml: string;
+  /**
+   * The part did not exist at the time of the snapshot. Restoring it therefore
+   * means *deleting* the part again, not writing `xml` back — this is what lets
+   * a structural edit (deleting a slide) undo and redo symmetrically.
+   */
+  absent?: boolean;
+}
+
+/**
+ * Reads a part's current state to keep for the opposite stack. Returning a
+ * string is the common case; a full {@link Snapshot} lets a caller report that
+ * the part is currently absent.
+ */
+export type PartReader = (part: string) => string | Snapshot | undefined;
+
+function toSnapshot(part: string, state: string | Snapshot | undefined): Snapshot | undefined {
+  if (state === undefined) return undefined;
+  return typeof state === 'string' ? { part, xml: state } : state;
 }
 
 /** Default cap on retained change sets, oldest dropped first. */
@@ -53,25 +71,25 @@ export class History {
    * Pop the change set to restore, given a reader for each part's current state
    * to keep for redo.
    */
-  undo(current: (part: string) => string | undefined): Snapshot[] | undefined {
+  undo(current: PartReader): Snapshot[] | undefined {
     return this.step(this.undoStack, this.redoStack, current);
   }
 
-  redo(current: (part: string) => string | undefined): Snapshot[] | undefined {
+  redo(current: PartReader): Snapshot[] | undefined {
     return this.step(this.redoStack, this.undoStack, current);
   }
 
   private step(
     from: Snapshot[][],
     to: Snapshot[][],
-    current: (part: string) => string | undefined,
+    current: PartReader,
   ): Snapshot[] | undefined {
     const set = from.pop();
     if (!set) return undefined;
     const inverse: Snapshot[] = [];
     for (const snap of set) {
-      const now = current(snap.part);
-      if (now !== undefined) inverse.push({ part: snap.part, xml: now });
+      const now = toSnapshot(snap.part, current(snap.part));
+      if (now !== undefined) inverse.push(now);
     }
     if (inverse.length) to.push(inverse);
     return set;

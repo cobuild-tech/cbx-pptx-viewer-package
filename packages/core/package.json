@@ -1,6 +1,6 @@
 {
   "name": "@cobuildx.ai/office-viewer",
-  "version": "0.1.8",
+  "version": "0.1.9",
   "description": "Renders and edits .pptx, .docx and .xlsx files in the browser, with optional React bindings",
   "type": "module",
   "main": "./dist/index.js",

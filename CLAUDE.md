@@ -62,7 +62,7 @@ XLSX:  read (OPC) -> parse (XML -> model, lazily per sheet)         -> render (D
 - **read** (`oxml/package.ts`) — unzip, resolve content types + relationships.
 - **parse** — turn XML parts into a render-agnostic model (`pptx/model.ts` / `docx/model.ts`).
 - **resolve/paginate** — the fidelity core. PPTX slides inherit geometry/color/font/text styles through layout → master → theme, with scheme colors mapped through the master's color map and transformed (lumMod/lumOff/tint/shade/alpha). DOCX styles cascade run → paragraph → linked → docDefaults, then blocks are measured off-screen and flowed into pages by section page-size/margins.
-- **render** — model → HTML/CSS/SVG. PPTX positions shapes absolutely and scales the whole slide to fit; DOCX flows pages in a scrollable stack. All geometry converts EMU (914,400/inch) → CSS px at 96 DPI via `oxml/units.ts`.
+- **render** — model → HTML/CSS/SVG. PPTX positions shapes absolutely and scales the whole slide to fit, laid out PowerPoint-style with a thumbnail rail beside the stage; DOCX flows pages in a scrollable stack. All geometry converts EMU (914,400/inch) → CSS px at 96 DPI via `oxml/units.ts`.
 
 ### Package layout (`packages/core/src/`)
 
@@ -75,6 +75,7 @@ oxml/             SHARED, format-agnostic — the only layer pptx/ and docx/ may
   package.ts      OPC: unzip, content types, relationship resolution
   xml.ts          order-preserving, namespace-aware XML tree + helpers
   units.ts        EMU / point / twip -> CSS pixel conversions
+  stylesheet.ts   ref-counted <style> injection, shared by all viewer chrome
   edit/           editing primitives every format shares: attrs.ts (DOM marker
                   names), format.ts (the RunFormat value), history.ts (snapshot
                   undo), selection.ts, styles.ts (editable-region outlines)
@@ -82,7 +83,8 @@ oxml/             SHARED, format-agnostic — the only layer pptx/ and docx/ may
 pptx/             PowerPoint feature slices
   deck/           top-level loader; presentation + slide/layout/master/theme
   edit/           text editing: source addressing, DOM reconciliation,
-                  XML write-back, formatting, undo/redo
+                  XML write-back, formatting, undo/redo; slideOps.ts holds the
+                  structural (whole-slide) edits
   slides/         slide composition (master -> layout -> slide)
   shapes/         fills, geometry, placeholders, shape props/render
   text/           text bodies, runs, text-style inheritance
@@ -90,7 +92,8 @@ pptx/             PowerPoint feature slices
   color.ts        scheme-color map + modifier transforms
   model.ts        render-agnostic intermediate representation
   render/         model -> HTML/CSS/SVG (dom.ts), font install, primitives
-  viewer/         navigation, fit-to-viewport scaling, keyboard
+  viewer/         viewer.ts (navigation, fit-to-viewport scaling, keyboard)
+                  filmstrip.ts (the left-hand thumbnail rail)
 
 docx/             Word feature slices (same shape as pptx)
   document/       top-level loader; body parsing
@@ -121,6 +124,7 @@ xlsx/             Excel feature slices (same shape as pptx/docx)
 
 - PPTX: renders ~106 preset shapes + custom geometry, charts (static SVG snapshot), tables, SmartArt (cached fast path + data-model layout fallback by family), gradients (incl. radial focus/path), autofit text. Effects (shadow/glow/reflection), transitions, and animations are not rendered. `.ppt` (legacy binary) is out of scope.
 - PPTX **text editing** (opt in via `<PptxViewer editable>` / `createViewer(deck, el, { editable: true })`): inline WYSIWYG editing of the slide's own text bodies — including table cell text — with paragraph split/merge, a formatting toolbar (bold/italic/underline/strike, size, colour, typeface), undo/redo, and export back to a `.pptx` `Blob` via `exportBlob()`. Text inherited from a layout or master is rendered but read-only, since editing it would change every slide that shares it. Shape geometry, images and charts are not editable.
+- PPTX **slide deletion** (`viewer.deleteSlide(index?)`, same `editable` opt-in): removes the slide from the running order, its relationship, its `[Content_Types].xml` override, its own part and rels, and its notes slide, and purges custom-show / section references to it. A deck must keep at least one slide. Undoable like any other edit.
 - DOCX **text editing** (opt in via `<DocxViewer editable>` / `createDocxViewer(doc, el, { editable: true })`): inline WYSIWYG editing of body text including table cell text, paragraph split/merge, the same formatting toolbar, undo/redo, and export to a `.docx` `Blob`. Header and footer text renders but is read-only, as are generated list markers and field results. **Edit mode renders the document as one continuous column instead of fixed pages** — see below.
 - XLSX **cell editing** (opt in via `<XlsxViewer editable>` / `createXlsxViewer(wb, el, { editable: true })`): in-place editing of cell values and formulas with Excel-like keys (arrows, Enter, Tab, F2, Delete, shift-select, formula bar), cell formatting (font, fill, alignment, wrap, number format), undo/redo, and export to a `.xlsx` `Blob`. Formulas are stored but never evaluated — the workbook is flagged `fullCalcOnLoad` so Excel recalculates on open. Cells on a protected sheet, cells covered by a merge, and array/shared-formula hosts are read-only. Inserting/deleting rows and columns is out of scope (it would have to rewrite every reference and formula).
 
@@ -144,7 +148,10 @@ xlsx/             Excel feature slices (same shape as pptx/docx)
 **Traps that have already bitten:**
 
 - `Numbering` (`docx/numbering/numbering.ts`) holds live counters that `marker()` advances while walking the body. `DocxDocument.rebuild()` must construct a **fresh** `Numbering`, or a re-parse renders an ordered list as "4. 5. 6.". There is a test for this.
-- **A commit invalidates every model reference held across it.** Both `Deck.rebuildSlide` and `DocxDocument.rebuild` build fresh paragraphs/runs and drop the source map, so re-read from `deck.slides` / `doc.sections` after each commit.
+- **A commit invalidates every model reference held across it.** Both `Deck.rebuildSlide` and `DocxDocument.rebuild` build fresh paragraphs/runs and drop the source map, so re-read from `deck.slides` / `doc.sections` after each commit. A *structural* PPTX edit goes further: `Deck.rebuild()` re-reads the running order and rebuilds every slide, so slide indices shift too.
+- **Thumbnails render through `renderSlide`, never a second renderer** — a thumbnail that disagrees with its slide is worse than no thumbnail. They are drawn lazily (IntersectionObserver, with an eager fallback where it is missing) and *without* the edit context, so the rail can never become a second place to type.
+- **A deleted slide is referenced from four places at once** — `<p:sldIdLst>`, presentation.xml.rels, a `[Content_Types].xml` override, and (optionally) custom shows / the `<p14:section>` list. Leaving any one behind makes PowerPoint call the file corrupt, so `pptx/edit/slideOps.ts` cleans all of them in one pass. Media the slide used is deliberately *left*: other slides usually share it, and an unreferenced media part is harmless.
+- **`OpcPackage.deletePart` also drops the part's `.rels`,** so anything snapshotting for undo must list those rels parts explicitly — a deletion it cannot put back in full is not undoable. `Snapshot.absent` is how "this part did not exist" round-trips through `History`.
 - `OpcPackage.toBlob` defaults to the **docx** content type — PPTX export must pass its own.
 
 - **Rows and cells must stay in ascending order.** Excel rejects a worksheet where they are not, so `xlsx/edit/xmlWrite.ts` splices new `<row>`/`<c>` elements into position rather than appending.
