@@ -256,3 +256,21 @@ export function buildTextChain(
   if (ctx.defaultTextStyle) chain.push(ctx.defaultTextStyle);
   return new TextStyleChain(chain, ctx.colorCtx);
 }
+
+/**
+ * A shape's non-visual identity — `<p:cNvPr id name>`, reached through whichever
+ * `nv*Pr` wrapper the shape kind uses (`nvSpPr`, `nvPicPr`, `nvGrpSpPr`,
+ * `nvCxnSpPr`, `nvGraphicFramePr`). The id is unique within a shape tree, which
+ * is what lets the editor re-find a selected shape after a commit rebuilds the
+ * model.
+ */
+export function identityOf(node: XmlNode): { id?: string; name?: string } {
+  const nv = node.children.find((c) => localName(c.name).startsWith('nv'));
+  const cNvPr = child(nv, 'cNvPr');
+  const out: { id?: string; name?: string } = {};
+  const id = attr(cNvPr, 'id');
+  const name = attr(cNvPr, 'name');
+  if (id !== undefined) out.id = id;
+  if (name !== undefined) out.name = name;
+  return out;
+}

@@ -68,8 +68,18 @@ every other part is emitted from its original bytes.
 
 ### Components
 
-**`<PptxViewer src toolbar? filmstrip? filmstripWidth? editable? textBoxOutline? className? style? onLoad? onError? onSlideChange? onEdit? />`**
-Renders a `.pptx` deck with built-in prev/next navigation. Pass a ref to get `{ next(), prev(), goTo(index), applyFormat(), undo(), redo(), exportBlob(), deck }`.
+**`<PptxViewer src toolbar? filmstrip? filmstripWidth? editable? shapeEditing? className? style? onLoad? onError? onSlideChange? onEdit? onShapeSelectionChange? />`**
+Renders a `.pptx` deck with built-in prev/next navigation. Pass a ref to get `{ next(), prev(), goTo(index), applyFormat(), deleteSlide(), deleteShapes(), reorderShape(), editText(), selectedShapes(), undo(), redo(), exportBlob(), deck }`.
+
+With `editable`, shapes work the way they do in PowerPoint: a click selects, drag
+moves, the grips resize (shift for the ratio, alt from the centre), the knob
+rotates (shift snaps to 15°), arrows nudge, Delete removes, and Ctrl+`]`/`[`
+restack. A second click on the selected shape — or Enter/F2 — puts the caret in
+its text (in a table, in the cell you clicked); Escape comes back out. A click
+selects a group as a unit and clicking it again steps inside to the child under
+the pointer, which then moves, resizes and takes text like any other shape;
+Escape steps back out a level at a time. Pass `shapeEditing={false}` for text
+only.
 
 **`<DocxViewer src toolbar? editable? editorToolbar? className? style? onLoad? onError? onPageChange? onEdit? />`**
 Renders a `.docx` document, paginated, with a thumbnail strip. Pass a ref to get `{ next(), prev(), goTo(index), applyFormat(), undo(), redo(), exportBlob(), doc }`.
@@ -142,7 +152,7 @@ Always call `dispose()` on the deck/document/workbook when you're done with it �
 
 **Editing** (`editable`)
 
-- PPTX: the slide's own text bodies, including table cells — paragraph split/merge, character formatting, undo/redo, export. Text inherited from a layout or master renders but stays read-only, since editing it would change every slide that shares it. Whole slides can be deleted with `viewer.deleteSlide(index?)` (the deck must keep at least one). Shape geometry, images and charts are not editable.
+- PPTX: the slide's own text bodies, including table cells — paragraph split/merge, character formatting, undo/redo, export. Text inherited from a layout or master renders but stays read-only, since editing it would change every slide that shares it. Whole slides can be deleted with `viewer.deleteSlide(index?)` (the deck must keep at least one). Shapes — the slide's own, groups and the children inside them — can be moved, resized, rotated, restacked and deleted. Shape *content* (fill, geometry, images, charts) is not editable, and a rotated or mirrored group stays the unit rather than opening.
 - DOCX: body text including table cells. Header and footer text, generated list markers and field results stay read-only. Edit mode renders the document as one continuous column instead of fixed pages (Word reflows on open, so pagination is a display concern only) and re-paginates on exit.
 - XLSX: cell values, formulas and cell formatting (bold/italic/underline/strike, size, font, text colour, fill, alignment, wrap, number format), with Excel-like keyboard behaviour — arrows, Enter, Tab, F2, Delete, shift-select. Formulas are stored but not evaluated: the workbook is flagged so Excel recalculates on open. Cells on a protected sheet, cells covered by a merge, and array/shared-formula hosts stay read-only. Inserting or deleting rows and columns is not supported.
 

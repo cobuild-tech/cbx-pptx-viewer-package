@@ -89,14 +89,25 @@ function renderEditable(deck: Deck, shapeIndex: number) {
 }
 
 describe('pptx edit — render markers', () => {
-  it('marks the body, paragraphs and runs, and makes the body editable', () => {
+  it('marks the body, paragraphs and runs', () => {
     const deck = Deck.load(buildDeck());
     const { el } = renderEditable(deck, 0);
 
     expect(el.getAttribute(EDIT_ATTR.body)).toBeTruthy();
-    expect(el.contentEditable).toBe('true');
     expect(el.querySelectorAll(`[${EDIT_ATTR.para}]`)).toHaveLength(1);
     expect(el.querySelectorAll(`[${EDIT_ATTR.run}]`)).toHaveLength(2);
+  });
+
+  it('makes a body contentEditable only once it is opened for typing', () => {
+    const deck = Deck.load(buildDeck());
+    // Selection comes first: an addressable box is not a box you can type in.
+    expect(renderEditable(deck, 0).el.getAttribute('contenteditable')).not.toBe('true');
+
+    const ctx = new EditContext(deck, 0);
+    const body = bodyAt(deck, 0);
+    ctx.setTextEditing(body);
+    const el = renderTextBody(body, { imageUrl: () => undefined, edit: ctx });
+    expect(el.getAttribute('contenteditable')).toBe('true');
   });
 
   it('locks bullets and field text against editing', () => {
@@ -237,7 +248,7 @@ describe('pptx edit — text box affordances', () => {
     expect(el.style.outline).toBe('');
   });
 
-  it('installs a stylesheet outlining editable boxes on hover and focus', () => {
+  it('outlines only the box being typed in, the way PowerPoint does', () => {
     const deck = Deck.load(buildDeck());
     const container = document.createElement('div');
     document.body.appendChild(container);
@@ -245,34 +256,14 @@ describe('pptx edit — text box affordances', () => {
 
     const style = document.getElementById('cbx-edit-styles');
     expect(style).not.toBeNull();
-    expect(style!.textContent).toContain('[data-cbx-body]:hover');
+    // A focus ring on the box in use, and nothing on any other box: selection
+    // handles are what tell the user which shapes are editable.
+    expect(style!.textContent).toContain('[contenteditable="true"]:focus');
     expect(style!.textContent).toContain('cursor:text');
-    // Only the focused box is outlined solid.
-    expect(style!.textContent).toContain('[data-cbx-body]:focus');
+    expect(style!.textContent).not.toContain(':hover');
 
     viewer.destroy();
     expect(document.getElementById('cbx-edit-styles')).toBeNull();
-  });
-
-  it('outlines every box in "always" mode and none in "none"', () => {
-    const deck = Deck.load(buildDeck());
-    const container = document.createElement('div');
-    document.body.appendChild(container);
-    const viewer = new Viewer(deck, container, {
-      editable: true,
-      webFonts: false,
-      textBoxOutline: 'always',
-    });
-
-    const style = () => document.getElementById('cbx-edit-styles')!.textContent!;
-    expect(style()).toContain('[data-cbx-body]:not(:focus)');
-
-    viewer.setTextBoxOutline('none');
-    expect(style()).not.toContain('[data-cbx-body]:not(:focus)');
-    expect(style()).not.toContain(':hover:not(:focus)');
-    // Focus feedback survives in every mode.
-    expect(style()).toContain('[data-cbx-body]:focus');
-    viewer.destroy();
   });
 
   it('adds no stylesheet when the viewer is read-only', () => {

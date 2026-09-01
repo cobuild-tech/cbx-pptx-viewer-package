@@ -10,15 +10,20 @@
  */
 import { localName } from '../../oxml/xml.js';
 import type { Deck } from '../deck/deck.js';
-import type { TextBody, TextRun } from '../model.js';
-import type { EditRenderContext } from '../render/primitives.js';
+import type { Shape, TextBody, TextRun } from '../model.js';
+import type { EditRenderContext, ShapeFrame } from '../render/primitives.js';
+import { SLIDE_FRAME } from '../render/primitives.js';
 
 export class EditContext implements EditRenderContext {
   private readonly deck: Deck;
   private slideIndex: number;
   private byKey = new Map<string, object>();
   private keys = new WeakMap<object, string>();
+  /** Where each selectable shape's coordinate space lands on the slide. */
+  private frames = new WeakMap<object, ShapeFrame>();
   private next = 0;
+  /** The text body currently open for typing, if the user has entered one. */
+  private editing: TextBody | null = null;
 
   constructor(deck: Deck, slideIndex: number) {
     this.deck = deck;
@@ -27,14 +32,32 @@ export class EditContext implements EditRenderContext {
 
   /** Point the context at a different slide and drop the previous keys. */
   retarget(slideIndex: number): void {
+    // Re-rendering the same slide (after a commit, a resize, a font landing)
+    // must not close a text box the user is typing in; moving to a different
+    // slide always does.
+    if (slideIndex !== this.slideIndex) this.editing = null;
     this.slideIndex = slideIndex;
     this.reset();
+  }
+
+  /**
+   * Open a text body for typing, or close whichever one is open. The renderer
+   * reads this to decide where contentEditable goes; the caller re-renders.
+   */
+  setTextEditing(body: TextBody | null): void {
+    this.editing = body;
+  }
+
+  /** The text body currently open for typing. */
+  get editingBody(): TextBody | null {
+    return this.editing;
   }
 
   /** Forget every key. Call before re-rendering a slide. */
   reset(): void {
     this.byKey = new Map();
     this.keys = new WeakMap();
+    this.frames = new WeakMap();
     this.next = 0;
   }
 
@@ -54,6 +77,26 @@ export class EditContext implements EditRenderContext {
 
   editable(body: TextBody): boolean {
     return this.deck.isEditable(this.slideIndex, body);
+  }
+
+  textEditing(body: TextBody): boolean {
+    return this.editing === body;
+  }
+
+  shapeFrame(shape: Shape, frame: ShapeFrame): void {
+    this.frames.set(shape, frame);
+  }
+
+  /**
+   * The space a shape was last drawn in — the slide's own unless the shape sits
+   * inside a group.
+   */
+  frameOf(shape: Shape): ShapeFrame {
+    return this.frames.get(shape) ?? SLIDE_FRAME;
+  }
+
+  selectable(shape: Shape): boolean {
+    return this.deck.isEditable(this.slideIndex, shape);
   }
 
   isField(run: TextRun): boolean {

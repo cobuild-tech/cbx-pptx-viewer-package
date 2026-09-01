@@ -1,7 +1,6 @@
 import { Suspense, lazy, useCallback, useRef, useState } from 'react';
 import type { CSSProperties, DragEvent } from 'react';
 import { PptxViewer, DocxViewer, XlsxViewer } from '@cobuildx.ai/office-viewer/react';
-import type { TextBoxOutline } from '@cobuildx.ai/office-viewer';
 
 const PptxReactViewerWrap = lazy(() => import('./renderers/PptxReactViewerWrap'));
 const PptxViewJsWrap = lazy(() => import('./renderers/PptxViewJsWrap'));
@@ -34,7 +33,6 @@ export function App() {
   const [kind, setKind] = useState<Kind>('pptx');
   const [renderer, setRenderer] = useState<RendererId>('mine');
   const [editable, setEditable] = useState(false);
-  const [outline, setOutline] = useState<TextBoxOutline>('hover');
   const [dragging, setDragging] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -106,21 +104,6 @@ export function App() {
           </label>
         )}
 
-        {file && kind === 'pptx' && renderer === 'mine' && editable && (
-          <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-            <span style={{ color: '#aaa' }}>Boxes:</span>
-            <select
-              style={select}
-              value={outline}
-              onChange={(e) => setOutline(e.target.value as TextBoxOutline)}
-              title="Outline editable text boxes"
-            >
-              <option value="hover">On hover</option>
-              <option value="always">Always</option>
-              <option value="none">Only when focused</option>
-            </select>
-          </label>
-        )}
 
         {file && (
           <div style={fileChip}>
@@ -169,7 +152,6 @@ export function App() {
                 key={`pptx:${file.name}:${editable ? 'edit' : 'read'}`}
                 src={file}
                 editable={editable}
-                textBoxOutline={outline}
                 style={{ flex: 1, minHeight: 0 }}
               />
             )}

@@ -26,6 +26,7 @@ import {
   parseGeometry,
   resolveTransform,
   resolveGeometry,
+  identityOf,
   resolveStroke,
   resolveEffects,
   styleRefColor,
@@ -76,6 +77,25 @@ function* expandChildren(tree: XmlNode): Generator<XmlNode> {
 }
 
 function buildShape(
+  node: XmlNode,
+  ctx: SlideBuildCtx,
+  scope: ParseScope,
+  groupFill?: Fill,
+): Shape | null {
+  const shape = dispatchShape(node, ctx, scope, groupFill);
+  if (!shape) return null;
+  // Address the shape by the node it came from, the same way text bodies are.
+  // The scope carries its own part path, so this also decides what the editor
+  // may move: a shape composited in from a layout or master is not the slide's
+  // to reposition.
+  scope.recordSource?.(shape, node);
+  const { id, name } = identityOf(node);
+  if (id !== undefined) shape.id = id;
+  if (name !== undefined) shape.name = name;
+  return shape;
+}
+
+function dispatchShape(
   node: XmlNode,
   ctx: SlideBuildCtx,
   scope: ParseScope,

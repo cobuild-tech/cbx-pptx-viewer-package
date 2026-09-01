@@ -6,10 +6,40 @@
  * background — in one place so feature slices (shapes/text/tables/pictures/…)
  * don't duplicate them.
  */
-import type { Fill, TextBody, TextRun, Transform } from '../model.js';
+import type { Fill, Shape, TextBody, TextRun, Transform } from '../model.js';
 import { colorToCss } from '../color.js';
+import { EDIT_ATTR } from '../../oxml/edit/attrs.js';
 
 export const SVG_NS = 'http://www.w3.org/2000/svg';
+
+/**
+ * How a coordinate space lands on the slide.
+ *
+ * A shape's transform is stated in the space of whatever contains it: the slide
+ * for a top-level shape, but a group's own child space (`chOff`/`chExt`) for
+ * anything inside a group. `renderGroup` realises that space as a CSS
+ * scale+translate, so one shape's box can be mapped to the slide with
+ * `slideX = ox + sx * x`. The selection overlay lives in slide space, so it
+ * needs this to draw handles on a shape nested in a group — and to take a drag
+ * measured on screen back into the space the shape's XML is written in.
+ */
+export interface ShapeFrame {
+  /** Slide-space position of this space's origin. */
+  ox: number;
+  oy: number;
+  /** Scale from this space to slide space. */
+  sx: number;
+  sy: number;
+  /**
+   * True when an ancestor group is rotated or mirrored, which the two numbers
+   * above cannot express. Manipulating a shape inside one would draw handles in
+   * the wrong place, so the editor keeps the group itself as the unit instead.
+   */
+  turned: boolean;
+}
+
+/** The slide's own space: the identity mapping. */
+export const SLIDE_FRAME: ShapeFrame = { ox: 0, oy: 0, sx: 1, sy: 1, turned: false };
 
 /**
  * What the renderer needs in order to make text editable. Supplied by the edit
@@ -27,6 +57,24 @@ export interface EditRenderContext {
    * date). They render but must not be typed into.
    */
   isField(run: TextRun): boolean;
+  /**
+   * True if this shape is the slide's own and may be selected and moved. A
+   * shape composited in from the layout or master is drawn but belongs to every
+   * slide sharing it, so it is not the user's to reposition here.
+   */
+  selectable?(shape: Shape): boolean;
+  /**
+   * True if this text body is the one open for typing. Selection comes first —
+   * a single click picks the shape — so only the body the user has explicitly
+   * entered is made contentEditable.
+   */
+  textEditing?(body: TextBody): boolean;
+  /**
+   * Record which coordinate space a selectable shape was drawn in, so the
+   * editor can map its box to the slide. Called only for shapes that are
+   * marked selectable; absent for the slide's own space, which is the identity.
+   */
+  shapeFrame?(shape: Shape, frame: ShapeFrame): void;
 }
 
 export interface RenderDeps {
@@ -42,6 +90,24 @@ export interface RenderDeps {
    * renderer reads this to counter the horizontal squish. Absent ⇒ no scaling.
    */
   groupScale?: { sx: number; sy: number };
+  /**
+   * The coordinate space the shapes being rendered are stated in. Absent at the
+   * top level, where it is the slide's own space; {@link renderGroup} composes a
+   * new one for a group's children.
+   */
+  frame?: ShapeFrame;
+}
+
+/**
+ * Mark a shape as selectable, if the edit layer says it is, and record the
+ * space it was drawn in. Both the slide renderer and `renderGroup` go through
+ * this, which is what makes a shape inside a group addressable at all.
+ */
+export function markSelectable(el: HTMLElement, shape: Shape, deps: RenderDeps): void {
+  const edit = deps.edit;
+  if (!edit?.selectable?.(shape)) return;
+  el.setAttribute(EDIT_ATTR.shape, edit.key(shape));
+  edit.shapeFrame?.(shape, deps.frame ?? SLIDE_FRAME);
 }
 
 /** Position + rotate/flip a shape container per its transform. */

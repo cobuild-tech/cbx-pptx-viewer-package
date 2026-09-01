@@ -21,6 +21,19 @@ export function emuToPx(emu: number): number {
   return emu / EMU_PER_PX;
 }
 
+/** Convert CSS pixels (96 DPI base space) back to EMU, rounded to a whole unit.
+ * EMU is an integer type in OOXML, so this is where an edited geometry lands on
+ * the grid; going back through {@link emuToPx} is exact to within half an EMU
+ * (about 5e-5 px), so repeated edits cannot drift. */
+export function pxToEmu(px: number): number {
+  return Math.round(px * EMU_PER_PX);
+}
+
+/** Convert degrees to the `rot` attribute's 60000ths of a degree. */
+export function degToAngle(deg: number): number {
+  return Math.round(deg * 60000);
+}
+
 /** Convert EMU to points. */
 export function emuToPt(emu: number): number {
   return emu / EMU_PER_POINT;

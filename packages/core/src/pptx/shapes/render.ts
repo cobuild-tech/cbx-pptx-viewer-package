@@ -18,7 +18,15 @@ import type {
 } from '../model.js';
 import { colorToCss } from '../color.js';
 import { presetPath, OPEN_PRESETS, EVENODD_PRESETS } from './geometry/presets.js';
-import { SVG_NS, positioned, applyFillBackground, type RenderDeps } from '../render/primitives.js';
+import {
+  SVG_NS,
+  SLIDE_FRAME,
+  positioned,
+  applyFillBackground,
+  markSelectable,
+  type RenderDeps,
+  type ShapeFrame,
+} from '../render/primitives.js';
 import { renderTextBody } from '../text/render.js';
 import { applyEffects } from '../effects/render.js';
 import { renderShape } from '../render/dom.js';
@@ -114,12 +122,35 @@ export function renderGroup(shape: GroupShape, deps: RenderDeps): HTMLElement {
   // ancestor scale down so the text renderer can keep glyphs un-squished.
   const cSx = (deps.groupScale?.sx ?? 1) * sx;
   const cSy = (deps.groupScale?.sy ?? 1) * sy;
+  // Same mapping again, but as numbers the selection overlay can use: a child's
+  // box is stated in the group's child space, and handles are drawn on the
+  // slide. A rotated or mirrored group makes that mapping more than a
+  // scale+translate, which `turned` tells the editor about.
+  const parent = deps.frame ?? SLIDE_FRAME;
+  const gx = shape.transform?.x ?? 0;
+  const gy = shape.transform?.y ?? 0;
+  const frame: ShapeFrame = {
+    ox: parent.ox + parent.sx * (gx - sx * co.x),
+    oy: parent.oy + parent.sy * (gy - sy * co.y),
+    sx: parent.sx * sx,
+    sy: parent.sy * sy,
+    turned:
+      parent.turned ||
+      !!shape.transform?.rot ||
+      !!shape.transform?.flipH ||
+      !!shape.transform?.flipV,
+  };
+
   const childDeps: RenderDeps =
-    cSx !== 1 || cSy !== 1 ? { ...deps, groupScale: { sx: cSx, sy: cSy } } : deps;
+    cSx !== 1 || cSy !== 1
+      ? { ...deps, groupScale: { sx: cSx, sy: cSy }, frame }
+      : { ...deps, frame };
 
   for (const childShape of shape.children) {
     const childEl = renderShape(childShape, childDeps);
-    if (childEl) inner.appendChild(childEl);
+    if (!childEl) continue;
+    markSelectable(childEl, childShape, childDeps);
+    inner.appendChild(childEl);
   }
   el.appendChild(inner);
   return el;

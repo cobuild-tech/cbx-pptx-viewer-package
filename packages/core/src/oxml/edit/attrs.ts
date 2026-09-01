@@ -10,4 +10,6 @@ export const EDIT_ATTR = {
   run: 'data-cbx-run',
   /** Marks a toolbar-applied format that reconciliation must turn into a run. */
   fmt: 'data-cbx-fmt',
+  /** Marks a shape the user may select and move (PPTX). */
+  shape: 'data-cbx-shape',
 } as const;
