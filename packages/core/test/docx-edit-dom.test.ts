@@ -233,6 +233,28 @@ describe('docx edit — viewer', () => {
     expect(container.textContent).toContain('Farewell');
   });
 
+  it('formats the selected text', () => {
+    const { doc, viewer } = mount(true);
+    const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;
+    const text = el.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(text, 0);
+    range.setEnd(text, 5);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    // 'Hello ' is plain and 'World' is already bold in the fixture, so bolding
+    // the first five characters must leave exactly 'Hello' newly bold and the
+    // text untouched. A DOCX paragraph is its own editable unit and carries no
+    // body marker, so requiring one made every formatting command a no-op.
+    expect(viewer.applyFormat({ bold: true })).toBe(true);
+    const runs = paras(doc)[0]!.runs;
+    expect(runs.map((r) => r.text).join('')).toBe('Hello World');
+    expect(runs.filter((r) => r.bold).map((r) => r.text)).toEqual(['Hello', 'World']);
+    expect(viewer.hasEdits).toBe(true);
+  });
+
   it('undoes and redoes a committed edit', () => {
     const { doc, viewer } = mount(true);
     const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;

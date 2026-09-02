@@ -62,7 +62,13 @@ export function applyFormatToSelection(root: Element, format: RunFormat): HTMLEl
   const range = sel.getRangeAt(0);
   if (range.collapsed) return null;
 
-  const body = bodyElementOf(range.commonAncestorContainer, root);
+  // PPTX's editable unit is a whole text body; DOCX's is a single paragraph,
+  // which carries no body marker — so fall back to the paragraph. The element
+  // returned is what the caller commits, and both viewers accept either.
+  const body =
+    bodyElementOf(range.commonAncestorContainer, root) ??
+    paraElementOf(range.commonAncestorContainer, root) ??
+    paraElementOf(range.startContainer, root);
   if (!body) return null;
 
   const doc = root.ownerDocument!;
