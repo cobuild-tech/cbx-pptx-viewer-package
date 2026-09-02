@@ -10,7 +10,7 @@ import { OpcPackage } from '../../oxml/package.js';
 import { RelType } from '../relTypes.js';
 import { child, children, attr, attrNum, type XmlNode } from '../../oxml/xml.js';
 import { emuToPx } from '../../oxml/units.js';
-import type { Slide, SlideSize, EmbeddedFont } from '../model.js';
+import type { Shape, Slide, SlideSize, EmbeddedFont, TextBody } from '../model.js';
 import { buildSlide } from '../slides/slide.js';
 import { deleteSlide as deleteSlideParts, planSlideDeletion } from '../edit/slideOps.js';
 import type { Snapshot } from '../../oxml/edit/history.js';
@@ -116,6 +116,39 @@ export class Deck {
     const slide = this.slides[slideIndex];
     const src = this.sources.get(model);
     return !!slide && !!src && src.part === slide.part;
+  }
+
+  /**
+   * The text body on a slide that came from `node`.
+   *
+   * A commit re-parses the slide, so every model object handed out before it is
+   * dead — but the *XML* nodes survive, because a rebuild mutates the cached
+   * tree rather than replacing it. That makes the source node the one handle
+   * that spans a commit, which is how the editor keeps the box the user is
+   * typing in open across one.
+   */
+  bodyForNode(slideIndex: number, node: XmlNode): TextBody | undefined {
+    const slide = this.slides[slideIndex];
+    if (!slide) return undefined;
+    let found: TextBody | undefined;
+    const consider = (body: TextBody | undefined): void => {
+      if (!found && body && this.sources.get(body)?.node === node) found = body;
+    };
+    const walk = (shapes: readonly Shape[]): void => {
+      for (const shape of shapes) {
+        if (found) return;
+        if (shape.kind === 'shape') consider(shape.text);
+        else if (shape.kind === 'group') walk(shape.children);
+        else if (shape.kind === 'frame') {
+          for (const row of shape.table?.rows ?? []) {
+            for (const cell of row) consider(cell?.text);
+          }
+          walk(shape.diagram ?? []);
+        }
+      }
+    };
+    walk(slide.shapes);
+    return found;
   }
 
   /**

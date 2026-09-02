@@ -4,11 +4,14 @@ import {
   Viewer,
   type Deck,
   type Shape,
+  type ParaFormat,
   type RunFormat,
   type ZOrderMove,
 } from '../index.js';
 import { useDeck, type DeckSource } from './useDeck.js';
 import { EditorToolbar } from './EditorToolbar.js';
+import { ParaControls } from './ParaControls.js';
+import { Icons, ToolbarButton, ToolbarGroup, ToolbarText } from './ToolbarUi.js';
 
 export interface PptxViewerHandle {
   next(): void;
@@ -16,6 +19,12 @@ export interface PptxViewerHandle {
   goTo(index: number): void;
   /** Format the current selection (editable mode only). */
   applyFormat(format: RunFormat): void;
+  /** Format the paragraphs the selection touches (editable mode only). */
+  applyParaFormat(format: ParaFormat): void;
+  /** Turn those paragraphs into a bulleted or numbered list, or out of one. */
+  toggleList(kind: 'bullet' | 'number'): void;
+  /** Demote (+1) or promote (-1) those paragraphs through the list levels. */
+  indent(delta: number): void;
   /** Commit whatever text body is focused, without waiting for blur. */
   commit(): void;
   /** Delete a slide (the current one by default). Editable mode only. */
@@ -94,6 +103,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
   const [index, setIndex] = useState(0);
   const [count, setCount] = useState(0);
   const [format, setFormat] = useState<RunFormat>({});
+  const [paraFormat, setParaFormat] = useState<ParaFormat>({});
   const [selectedCount, setSelectedCount] = useState(0);
   // The viewer owns undo/redo state; mirror it so the toolbar re-renders.
   const [editState, setEditState] = useState({
@@ -133,6 +143,7 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
         onEdit?.(i);
       },
       onSelectionChange: setFormat,
+      onParaSelectionChange: setParaFormat,
       onShapeSelectionChange: (shapes) => {
         setSelectedCount(shapes.length);
         onShapeSelectionChange?.(shapes);
@@ -153,6 +164,9 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
       prev: () => viewerRef.current?.prev(),
       goTo: (i: number) => viewerRef.current?.goTo(i),
       applyFormat: (f: RunFormat) => viewerRef.current?.applyFormat(f),
+      applyParaFormat: (f: ParaFormat) => viewerRef.current?.applyParaFormat(f),
+      toggleList: (kind: 'bullet' | 'number') => viewerRef.current?.toggleList(kind),
+      indent: (delta: number) => viewerRef.current?.indentSelection(delta),
       commit: () => viewerRef.current?.commitActive(),
       deleteSlide: (i?: number) => viewerRef.current?.deleteSlide(i),
       deleteShapes: () => viewerRef.current?.deleteSelectedShapes(),
@@ -195,39 +209,44 @@ export const PptxViewer = forwardRef<PptxViewerHandle, PptxViewerProps>(function
           onExport={downloadEdits}
           exportLabel="Download .pptx"
           extras={
-            shapeEditing && (
-              <>
-                <span style={{ opacity: selectedCount ? 1 : 0.45 }}>
-                  {selectedCount === 0
-                    ? 'No shape selected'
-                    : `${selectedCount} shape${selectedCount > 1 ? 's' : ''}`}
-                </span>
-                <button
-                  style={btn}
-                  disabled={selectedCount !== 1}
-                  title="Bring forward (Ctrl+])"
-                  onClick={() => viewerRef.current?.reorderSelectedShape('forward')}
-                >
-                  ↑
-                </button>
-                <button
-                  style={btn}
-                  disabled={selectedCount !== 1}
-                  title="Send backward (Ctrl+[)"
-                  onClick={() => viewerRef.current?.reorderSelectedShape('backward')}
-                >
-                  ↓
-                </button>
-                <button
-                  style={btn}
-                  disabled={selectedCount === 0}
-                  title="Delete shape (Del)"
-                  onClick={() => viewerRef.current?.deleteSelectedShapes()}
-                >
-                  Delete shape
-                </button>
-              </>
-            )
+            <>
+              <ParaControls
+                format={paraFormat}
+                onToggleList={(kind) => viewerRef.current?.toggleList(kind)}
+                onIndent={(delta) => viewerRef.current?.indentSelection(delta)}
+                onFormat={(f) => viewerRef.current?.applyParaFormat(f)}
+              />
+              {shapeEditing && (
+                <ToolbarGroup label="Shape">
+                  <ToolbarText dim={selectedCount === 0}>
+                    {selectedCount === 0
+                      ? 'None selected'
+                      : `${selectedCount} shape${selectedCount > 1 ? 's' : ''}`}
+                  </ToolbarText>
+                  <ToolbarButton
+                    title="Bring forward (Ctrl+])"
+                    disabled={selectedCount !== 1}
+                    onClick={() => viewerRef.current?.reorderSelectedShape('forward')}
+                  >
+                    {Icons.bringForward}
+                  </ToolbarButton>
+                  <ToolbarButton
+                    title="Send backward (Ctrl+[)"
+                    disabled={selectedCount !== 1}
+                    onClick={() => viewerRef.current?.reorderSelectedShape('backward')}
+                  >
+                    {Icons.sendBackward}
+                  </ToolbarButton>
+                  <ToolbarButton
+                    title="Delete shape (Del)"
+                    disabled={selectedCount === 0}
+                    onClick={() => viewerRef.current?.deleteSelectedShapes()}
+                  >
+                    {Icons.trash}
+                  </ToolbarButton>
+                </ToolbarGroup>
+              )}
+            </>
           }
         />
       )}

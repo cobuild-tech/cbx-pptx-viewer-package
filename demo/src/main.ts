@@ -4,6 +4,7 @@ import {
   loadPptx,
   createViewer,
   type Viewer,
+  type ParaFormat,
   type RunFormat,
 } from '@cobuildx.ai/office-viewer';
 
@@ -18,14 +19,49 @@ const backEl = document.getElementById('back') as HTMLButtonElement;
 const delShapeEl = document.getElementById('delshape') as HTMLButtonElement;
 const stageEl = document.getElementById('stage')!;
 const posEl = document.getElementById('pos')!;
+const fontEl = document.getElementById('font') as HTMLSelectElement;
 const sizeEl = document.getElementById('size') as HTMLSelectElement;
 const colorEl = document.getElementById('color') as HTMLInputElement;
+const lineSpcEl = document.getElementById('linespc') as HTMLSelectElement;
+const spcBefEl = document.getElementById('spcbef') as HTMLSelectElement;
 const undoEl = document.getElementById('undo') as HTMLButtonElement;
 const redoEl = document.getElementById('redo') as HTMLButtonElement;
 const downloadEl = document.getElementById('download') as HTMLButtonElement;
+const delSlideEl = document.getElementById('delslide') as HTMLButtonElement;
 
+for (const family of [
+  'Arial',
+  'Calibri',
+  'Georgia',
+  'Helvetica',
+  'Segoe UI',
+  'Times New Roman',
+  'Trebuchet MS',
+  'Verdana',
+]) {
+  fontEl.add(new Option(family, family));
+}
 for (const pt of [8, 10, 12, 14, 18, 24, 28, 32, 40, 54, 66, 80]) {
   sizeEl.add(new Option(String(pt), String(pt)));
+}
+// Collapsed, a dropdown shows only its selected option, so the option text has
+// to say what the setting is rather than just its value.
+for (const mult of [1, 1.15, 1.5, 2]) {
+  lineSpcEl.add(new Option(`Line ${mult.toFixed(2)}`, String(mult)));
+}
+for (const pt of [0, 6, 12, 18]) {
+  spcBefEl.add(new Option(`Before ${pt} pt`, String(pt)));
+}
+
+/**
+ * Show `value` in a dropdown, adding it as an option when it is not one of the
+ * presets — decks are full of sizes and typefaces no preset list has.
+ */
+function showValue(el: HTMLSelectElement, value: string): void {
+  if (value && ![...el.options].some((o) => o.value === value)) {
+    el.add(new Option(value, value), 0);
+  }
+  el.value = value;
 }
 
 let viewer: Viewer | null = null;
@@ -57,7 +93,7 @@ function mountEditor(buf: ArrayBuffer): void {
     onShapeSelectionChange: (shapes) => {
       selEl.textContent =
         shapes.length === 0
-          ? 'no shape selected'
+          ? 'None selected'
           : shapes.length === 1
             ? (shapes[0]!.name ?? shapes[0]!.kind)
             : `${shapes.length} shapes`;
@@ -66,10 +102,26 @@ function mountEditor(buf: ArrayBuffer): void {
     onSelectionChange: (f) => {
       for (const b of document.querySelectorAll<HTMLButtonElement>('#editbar [data-fmt]')) {
         const key = b.dataset.fmt as keyof RunFormat;
-        b.style.background = f[key] ? '#0d6efd' : '#3a3a4e';
+        b.setAttribute('aria-pressed', f[key] ? 'true' : 'false');
       }
-      if (f.sizePt !== undefined) sizeEl.value = String(f.sizePt);
+      // Undefined means the selection disagrees: show no value rather than one
+      // of them. A real value that is nobody's preset (33.6pt, "Aptos Display")
+      // still has to show, or the field looks broken.
+      showValue(sizeEl, f.sizePt !== undefined ? String(f.sizePt) : '');
+      showValue(fontEl, f.font ?? '');
       if (f.colorHex) colorEl.value = `#${f.colorHex}`;
+    },
+    onParaSelectionChange: (f) => {
+      // A property the selected paragraphs disagree about arrives undefined —
+      // show it as "not pressed" rather than guessing one of them.
+      for (const b of document.querySelectorAll<HTMLButtonElement>('#editbar [data-list]')) {
+        b.setAttribute('aria-pressed', f.list === b.dataset.list ? 'true' : 'false');
+      }
+      for (const b of document.querySelectorAll<HTMLButtonElement>('#editbar [data-algn]')) {
+        b.setAttribute('aria-pressed', f.align === b.dataset.algn ? 'true' : 'false');
+      }
+      showValue(lineSpcEl, f.lineSpacingPct !== undefined ? String(f.lineSpacingPct) : '');
+      showValue(spcBefEl, f.spaceBeforePt !== undefined ? String(f.spaceBeforePt) : '');
     },
   });
   editorEl.hidden = false;
@@ -84,6 +136,7 @@ function syncButtons(): void {
   frontEl.disabled = picked !== 1;
   backEl.disabled = picked !== 1;
   delShapeEl.disabled = picked === 0;
+  delSlideEl.disabled = !viewer?.canDeleteSlide();
 }
 
 // Formatting must not steal focus, or the selection it applies to is gone.
@@ -91,10 +144,28 @@ for (const b of document.querySelectorAll<HTMLButtonElement>('#editbar [data-fmt
   b.addEventListener('mousedown', (e) => e.preventDefault());
   b.addEventListener('click', () => {
     const key = b.dataset.fmt as 'bold' | 'italic' | 'underline' | 'strike';
-    viewer?.applyFormat({ [key]: b.style.background !== 'rgb(13, 110, 253)' } as RunFormat);
+    viewer?.applyFormat({ [key]: b.getAttribute('aria-pressed') !== 'true' } as RunFormat);
   });
 }
 sizeEl.addEventListener('change', () => viewer?.applyFormat({ sizePt: Number(sizeEl.value) }));
+fontEl.addEventListener('change', () => viewer?.applyFormat({ font: fontEl.value }));
+// Paragraph commands work from a bare caret, so they must not steal it either.
+for (const b of document.querySelectorAll<HTMLButtonElement>(
+  '#editbar [data-list], #editbar [data-indent], #editbar [data-algn]',
+)) {
+  b.addEventListener('mousedown', (e) => e.preventDefault());
+  b.addEventListener('click', () => {
+    if (b.dataset.list) viewer?.toggleList(b.dataset.list as 'bullet' | 'number');
+    else if (b.dataset.indent) viewer?.indentSelection(Number(b.dataset.indent));
+    else viewer?.applyParaFormat({ align: b.dataset.algn as ParaFormat['align'] });
+  });
+}
+lineSpcEl.addEventListener('change', () =>
+  viewer?.applyParaFormat({ lineSpacingPct: Number(lineSpcEl.value) }),
+);
+spcBefEl.addEventListener('change', () =>
+  viewer?.applyParaFormat({ spaceBeforePt: Number(spcBefEl.value) }),
+);
 colorEl.addEventListener('change', () =>
   viewer?.applyFormat({ colorHex: colorEl.value.slice(1).toUpperCase() }),
 );
@@ -105,6 +176,7 @@ undoEl.addEventListener('click', () => viewer?.undo());
 redoEl.addEventListener('click', () => viewer?.redo());
 document.getElementById('prev')!.addEventListener('click', () => viewer?.prev());
 document.getElementById('next')!.addEventListener('click', () => viewer?.next());
+delSlideEl.addEventListener('click', () => viewer?.deleteSlide());
 downloadEl.addEventListener('click', () => {
   const blob = viewer?.exportBlob();
   if (!blob) return;

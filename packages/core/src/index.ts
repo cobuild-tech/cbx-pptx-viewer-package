@@ -78,6 +78,14 @@ export {
 export { reconcileTextBody } from './pptx/edit/reconcile.js';
 export { writeTextBody, type ParaEdit, type Segment } from './pptx/edit/xmlWrite.js';
 export { readFormat } from './pptx/edit/format.js';
+export {
+  applyParaFormat,
+  ensureParaProps,
+  readParaFormat,
+  clampLevel,
+  MAX_LEVEL,
+  type ResolvedPara,
+} from './pptx/edit/paraProps.js';
 export { EDIT_ATTR } from './oxml/edit/attrs.js';
 
 // Format-agnostic editing primitives, shared by every format slice.
@@ -85,10 +93,23 @@ export {
   applyFormatToSelection,
   formatAtSelection,
   bodyElementOf,
+  paraElementOf,
+  paragraphsInSelection,
+  stampParaFormat,
+  paraFormatAtSelection,
+  readCaretAddress,
+  restoreCaretAddress,
   type Resolver,
   type ReadRunFormat,
+  type ReadParaFormat,
+  type CaretAddress,
 } from './oxml/edit/selection.js';
-export { mergeFormat, isEmptyFormat, type RunFormat } from './oxml/edit/format.js';
+export {
+  mergeFormat,
+  isEmptyFormat,
+  type RunFormat,
+  type ParaFormat,
+} from './oxml/edit/format.js';
 export { installEditStyles, type TextBoxOutline } from './oxml/edit/styles.js';
 export { installStyleSheet } from './oxml/stylesheet.js';
 export { History, type Snapshot, type PartReader } from './oxml/edit/history.js';

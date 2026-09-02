@@ -13,9 +13,12 @@ import {
   child,
   children,
   createElement,
+  insertInOrder,
   localName,
   type XmlNode,
 } from '../../oxml/xml.js';
+
+export { insertInOrder };
 import { indexToColAlpha, parseCellRef } from '../sheets/sheet.js';
 import type { CellInput } from './values.js';
 import { isBlank } from './values.js';
@@ -45,24 +48,6 @@ const WORKSHEET_ORDER = [
 function prefixOf(node: XmlNode): string {
   const i = node.name.indexOf(':');
   return i === -1 ? '' : node.name.slice(0, i + 1);
-}
-
-/**
- * Insert `node` into `parent` at the position `order` dictates, i.e. before the
- * first existing child that must follow it.
- */
-export function insertInOrder(parent: XmlNode, node: XmlNode, order: string[]): void {
-  const rank = order.indexOf(localName(node.name));
-  if (rank === -1) {
-    parent.children.push(node);
-    return;
-  }
-  const at = parent.children.findIndex((c) => {
-    const r = order.indexOf(localName(c.name));
-    return r !== -1 && r > rank;
-  });
-  if (at === -1) parent.children.push(node);
-  else parent.children.splice(at, 0, node);
 }
 
 /** The `<sheetData>` element, created (in the right place) if absent. */

@@ -15,6 +15,7 @@ import {
   setAttr,
   removeAttr,
   insertChildAt,
+  insertInOrder,
   removeChildAt,
   resolveIndexPath,
 } from '../src/oxml/xml.js';
@@ -167,5 +168,27 @@ describe('xml mutation helpers', () => {
     const removed = removeChildAt(body, 0);
     expect(removed?.text).toBe('one');
     expect(body.children.map((c) => c.text)).toEqual(['two', 'three']);
+  });
+
+  it('insertInOrder places a child before the first one that must follow it', () => {
+    // OOXML content models are sequences: a child in the wrong slot makes Office
+    // call the part corrupt, so the order table decides the slot, not the caller.
+    const order = ['lnSpc', 'spcBef', 'buFont', 'buChar'];
+    const pPr = createElement('a:pPr', {}, [createElement('a:buChar', { char: '-' })]);
+
+    insertInOrder(pPr, createElement('a:buFont', { typeface: 'Arial' }), order);
+    insertInOrder(pPr, createElement('a:spcBef'), order);
+    expect(pPr.children.map((c) => c.name)).toEqual(['a:spcBef', 'a:buFont', 'a:buChar']);
+
+    // A name the table does not mention has nothing to be placed by, so it goes last.
+    insertInOrder(pPr, createElement('a:extLst'), order);
+    insertInOrder(pPr, createElement('a:lnSpc'), order);
+    expect(pPr.children.map((c) => c.name)).toEqual([
+      'a:lnSpc',
+      'a:spcBef',
+      'a:buFont',
+      'a:buChar',
+      'a:extLst',
+    ]);
   });
 });

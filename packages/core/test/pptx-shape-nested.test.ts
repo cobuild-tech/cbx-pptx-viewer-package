@@ -13,7 +13,7 @@ import { Deck } from '../src/pptx/deck/deck.js';
 import { RelType } from '../src/pptx/relTypes.js';
 import { Viewer } from '../src/pptx/viewer/viewer.js';
 import { EDIT_ATTR } from '../src/oxml/edit/attrs.js';
-import type { Shape } from '../src/pptx/model.js';
+import type { FrameShape, Shape } from '../src/pptx/model.js';
 
 vi.stubGlobal(
   'ResizeObserver',
@@ -253,6 +253,20 @@ describe('pptx shapes — inside a group', () => {
 });
 
 describe('pptx shapes — a table cell', () => {
+  it('bullets a cell paragraph like any other', () => {
+    const viewer = mount();
+    click(viewer, 'Grid', 450, 150);
+    container.dispatchEvent(new KeyboardEvent('keydown', { key: 'F2', bubbles: true }));
+    expect(viewer.isEditingText).toBe(true);
+
+    // A cell's text body carries the same markers as a shape's, so paragraph
+    // formatting reaches it with nothing extra.
+    expect(viewer.toggleList('bullet')).toBe(true);
+    const cell = (find(viewer, 'Grid') as FrameShape).table!.rows[0]![0]!;
+    expect(cell.text!.paragraphs[0]!.bullet).toMatchObject({ type: 'char', char: '•' });
+    viewer.destroy();
+  });
+
   it('types in a cell once the table is selected', () => {
     const viewer = mount();
     click(viewer, 'Grid', 450, 150);
