@@ -5,7 +5,14 @@
  * only the encoding is PowerPoint-specific — attributes on `<a:rPr>` plus a
  * `<a:solidFill>` child, in schema order.
  */
-import { child, createElement, setAttr, type XmlNode } from '../../oxml/xml.js';
+import {
+  child,
+  createElement,
+  insertInOrder,
+  localName,
+  setAttr,
+  type XmlNode,
+} from '../../oxml/xml.js';
 import { isEmptyFormat, mergeFormat, type RunFormat } from '../../oxml/edit/format.js';
 import type { TextRun } from '../model.js';
 
@@ -41,30 +48,6 @@ const RPR_ORDER = [
   'extLst',
 ];
 
-function rank(local: string): number {
-  const i = RPR_ORDER.indexOf(local);
-  return i === -1 ? RPR_ORDER.length : i;
-}
-
-function localOf(name: string): string {
-  const i = name.indexOf(':');
-  return i === -1 ? name : name.slice(i + 1);
-}
-
-/** Insert `node` into `parent` at the position its schema rank requires. */
-function insertOrdered(parent: XmlNode, node: XmlNode): void {
-  const r = rank(localOf(node.name));
-  let at = parent.children.length;
-  for (let i = 0; i < parent.children.length; i++) {
-    const c = parent.children[i];
-    if (c && rank(localOf(c.name)) > r) {
-      at = i;
-      break;
-    }
-  }
-  parent.children.splice(at, 0, node);
-}
-
 const FILL_TAGS = new Set(['noFill', 'solidFill', 'gradFill', 'blipFill', 'pattFill', 'grpFill']);
 
 /**
@@ -83,12 +66,13 @@ export function applyFormat(rPr: XmlNode, format: RunFormat, prefix: string): vo
 
   if (format.colorHex !== undefined) {
     // Replace whatever fill is there — a run has at most one.
-    rPr.children = rPr.children.filter((c) => !FILL_TAGS.has(localOf(c.name)));
-    insertOrdered(
+    rPr.children = rPr.children.filter((c) => !FILL_TAGS.has(localName(c.name)));
+    insertInOrder(
       rPr,
       createElement(q('solidFill'), {}, [
         createElement(q('srgbClr'), { val: format.colorHex.replace(/^#/, '').toUpperCase() }),
       ]),
+      RPR_ORDER,
     );
   }
 
@@ -98,7 +82,7 @@ export function applyFormat(rPr: XmlNode, format: RunFormat, prefix: string): vo
     for (const tag of ['latin', 'ea', 'cs']) {
       const existing = child(rPr, tag);
       if (existing) setAttr(existing, 'typeface', format.font);
-      else insertOrdered(rPr, createElement(q(tag), { typeface: format.font }));
+      else insertInOrder(rPr, createElement(q(tag), { typeface: format.font }), RPR_ORDER);
     }
   }
 }
@@ -149,5 +133,5 @@ export function readRunFormat(run: object): RunFormat {
 
 /** Remove a hyperlink from an rPr (used when a linked run is re-typed). */
 export function stripHyperlink(rPr: XmlNode): void {
-  rPr.children = rPr.children.filter((c) => localOf(c.name) !== 'hlinkClick');
+  rPr.children = rPr.children.filter((c) => localName(c.name) !== 'hlinkClick');
 }

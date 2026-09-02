@@ -250,6 +250,28 @@ export function insertChildAt(parent: XmlNode, index: number, child: XmlNode): v
   parent.children.splice(Math.max(0, Math.min(index, parent.children.length)), 0, child);
 }
 
+/**
+ * Insert `node` into `parent` at the position `order` dictates, i.e. before the
+ * first existing child that must follow it.
+ *
+ * OOXML content models are sequence-ordered: an element in the wrong slot makes
+ * Office call the part corrupt. `order` lists the local names in schema order;
+ * a name it does not mention is appended, since we have nothing to place it by.
+ */
+export function insertInOrder(parent: XmlNode, node: XmlNode, order: string[]): void {
+  const rank = order.indexOf(localName(node.name));
+  if (rank === -1) {
+    parent.children.push(node);
+    return;
+  }
+  const at = parent.children.findIndex((c) => {
+    const r = order.indexOf(localName(c.name));
+    return r !== -1 && r > rank;
+  });
+  if (at === -1) parent.children.push(node);
+  else parent.children.splice(at, 0, node);
+}
+
 export function removeChildAt(parent: XmlNode, index: number): XmlNode | undefined {
   if (index < 0 || index >= parent.children.length) return undefined;
   return parent.children.splice(index, 1)[0];

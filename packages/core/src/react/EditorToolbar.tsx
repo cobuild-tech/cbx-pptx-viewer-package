@@ -1,5 +1,13 @@
 import type { CSSProperties, ReactNode } from 'react';
 import type { RunFormat } from '../index.js';
+import {
+  Icons,
+  ToolbarBar,
+  ToolbarButton,
+  ToolbarColor,
+  ToolbarGroup,
+  ToolbarSelect,
+} from './ToolbarUi.js';
 
 export interface EditorToolbarProps {
   /** Formatting in effect at the caret, from `onSelectionChange`. */
@@ -15,8 +23,9 @@ export interface EditorToolbarProps {
   /** Label for the export button. */
   exportLabel?: string;
   /**
-   * Format-specific controls, rendered after the shared ones — e.g. a
-   * spreadsheet's cell fill and alignment, which have no run-level equivalent.
+   * Format-specific groups, rendered after the Font group — e.g. PowerPoint's
+   * Paragraph and Shape controls, or a spreadsheet's cell fill. Supply
+   * `ToolbarGroup`s so they carry the same captions and rules as the rest.
    */
   extras?: ReactNode;
   className?: string;
@@ -25,13 +34,27 @@ export interface EditorToolbarProps {
 
 const SIZES = [8, 10, 12, 14, 18, 24, 28, 32, 40, 54, 66, 80];
 
+const FONTS = [
+  'Arial',
+  'Calibri',
+  'Georgia',
+  'Helvetica',
+  'Segoe UI',
+  'Times New Roman',
+  'Trebuchet MS',
+  'Verdana',
+];
+
 /**
- * Formatting toolbar for an editable viewer. Format-agnostic: RunFormat is
- * shared, so the same toolbar drives both PPTX and DOCX editing.
+ * Formatting toolbar for an editable viewer, laid out like PowerPoint's Home
+ * ribbon: named groups of familiar icons rather than a single undifferentiated
+ * row. Format-agnostic — `RunFormat` is shared, so this drives PPTX, DOCX and
+ * XLSX editing alike, and each format adds its own groups through `extras`.
  *
- * Purely presentational — it reports what the user asked for and reflects the
- * format handed to it. Toggles use `format` as their source of truth so they
- * stay in sync with wherever the caret is.
+ * Purely presentational: it reports what the user asked for and reflects the
+ * format handed to it, so toggles stay in sync with wherever the caret is. A
+ * property the selection disagrees about arrives `undefined` and shows as
+ * unpressed (or `—` in a dropdown) rather than claiming a state.
  */
 export function EditorToolbar({
   format,
@@ -47,106 +70,75 @@ export function EditorToolbar({
   className,
   style,
 }: EditorToolbarProps) {
-  const toggle = (key: 'bold' | 'italic' | 'underline' | 'strike', label: string) => (
-    <button
+  const toggle = (
+    key: 'bold' | 'italic' | 'underline' | 'strike',
+    title: string,
+    icon: ReactNode,
+  ) => (
+    <ToolbarButton
       key={key}
-      type="button"
-      title={label}
-      aria-pressed={!!format[key]}
-      // The selection is lost on mousedown-driven focus change, so keep it.
-      onMouseDown={(e) => e.preventDefault()}
+      title={title}
+      pressed={!!format[key]}
       onClick={() => onFormat({ [key]: !format[key] } as RunFormat)}
-      style={{ ...btn, ...(format[key] ? btnActive : null), width: 30 }}
     >
-      {label}
-    </button>
+      {icon}
+    </ToolbarButton>
   );
 
   return (
-    <div className={className} style={{ ...barStyle, ...style }}>
-      {toggle('bold', 'B')}
-      {toggle('italic', 'I')}
-      {toggle('underline', 'U')}
-      {toggle('strike', 'S')}
+    <ToolbarBar className={className} style={style}>
+      <ToolbarGroup label="Font">
+        <ToolbarSelect
+          title="Font"
+          value={format.font}
+          width={124}
+          options={FONTS.map((f) => ({ value: f, label: f }))}
+          onChange={(v) => onFormat({ font: v })}
+        />
+        <ToolbarSelect
+          title="Font size"
+          value={format.sizePt}
+          width={56}
+          icon={Icons.fontSize}
+          options={SIZES.map((s) => ({ value: s, label: String(s) }))}
+          onChange={(v) => onFormat({ sizePt: Number(v) })}
+        />
+        {toggle('bold', 'Bold', Icons.bold)}
+        {toggle('italic', 'Italic', Icons.italic)}
+        {toggle('underline', 'Underline', Icons.underline)}
+        {toggle('strike', 'Strikethrough', Icons.strike)}
+        <ToolbarColor
+          title="Font colour"
+          hex={format.colorHex}
+          icon={Icons.fontColor}
+          onChange={(hex) => onFormat({ colorHex: hex })}
+        />
+      </ToolbarGroup>
 
-      <select
-        value={format.sizePt ?? ''}
-        onMouseDown={(e) => e.stopPropagation()}
-        onChange={(e) => onFormat({ sizePt: Number(e.target.value) })}
-        style={{ ...btn, width: 64 }}
-        title="Font size"
-      >
-        {format.sizePt === undefined && <option value="">—</option>}
-        {SIZES.map((s) => (
-          <option key={s} value={s}>
-            {s}
-          </option>
-        ))}
-      </select>
+      {extras}
 
-      <input
-        type="color"
-        value={`#${(format.colorHex ?? '000000').replace(/^#/, '')}`}
-        onChange={(e) => onFormat({ colorHex: e.target.value.slice(1).toUpperCase() })}
-        style={{ ...btn, width: 34, padding: 2 }}
-        title="Text colour"
-      />
-
-      {extras && (
-        <>
-          <span style={divider} />
-          {extras}
-        </>
-      )}
-
-      <span style={divider} />
-
-      <button type="button" style={btn} onClick={onUndo} disabled={!canUndo} title="Undo">
-        ↶
-      </button>
-      <button type="button" style={btn} onClick={onRedo} disabled={!canRedo} title="Redo">
-        ↷
-      </button>
+      <ToolbarGroup label="Undo" atEnd>
+        <ToolbarButton title="Undo" disabled={!canUndo} onClick={() => onUndo?.()}>
+          {Icons.undo}
+        </ToolbarButton>
+        <ToolbarButton title="Redo" disabled={!canRedo} onClick={() => onRedo?.()}>
+          {Icons.redo}
+        </ToolbarButton>
+      </ToolbarGroup>
 
       {onExport && (
-        <>
-          <span style={divider} />
-          <button type="button" style={btn} onClick={onExport} disabled={!hasEdits}>
-            {exportLabel}
-          </button>
-        </>
+        <ToolbarGroup label="File">
+          <ToolbarButton
+            title={exportLabel}
+            label={exportLabel}
+            primary
+            disabled={!hasEdits}
+            onClick={onExport}
+          >
+            {Icons.download}
+          </ToolbarButton>
+        </ToolbarGroup>
       )}
-    </div>
+    </ToolbarBar>
   );
 }
-
-const barStyle: CSSProperties = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '6px 10px',
-  background: '#2a2a2a',
-  color: '#eee',
-  font: '13px system-ui, sans-serif',
-};
-
-const btn: CSSProperties = {
-  padding: '4px 8px',
-  borderRadius: 6,
-  border: '1px solid #555',
-  background: '#3a3a3a',
-  color: '#eee',
-  cursor: 'pointer',
-};
-
-const btnActive: CSSProperties = {
-  background: '#0d6efd',
-  borderColor: '#0d6efd',
-};
-
-const divider: CSSProperties = {
-  width: 1,
-  alignSelf: 'stretch',
-  background: '#555',
-  margin: '0 4px',
-};

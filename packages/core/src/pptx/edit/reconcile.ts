@@ -13,7 +13,7 @@
  */
 import type { Paragraph, TextRun } from '../model.js';
 import { EDIT_ATTR } from '../../oxml/edit/attrs.js';
-import { mergeFormat, type RunFormat } from '../../oxml/edit/format.js';
+import { mergeFormat, type ParaFormat, type RunFormat } from '../../oxml/edit/format.js';
 import type { ParaEdit, Segment } from './xmlWrite.js';
 
 /** The zero-width space the renderer uses to give empty paragraphs height. */
@@ -30,12 +30,28 @@ function isText(n: Node): n is Text {
   return n.nodeType === 3;
 }
 
+/** True if the element is marked uneditable, however that was written. */
+function isLocked(el: HTMLElement): boolean {
+  return el.getAttribute('contenteditable') === 'false' || el.contentEditable === 'false';
+}
+
 /** Parse the JSON format payload the toolbar stamps onto a wrapper span. */
 function readFmtAttr(el: Element): RunFormat | undefined {
   const raw = el.getAttribute(EDIT_ATTR.fmt);
   if (!raw) return undefined;
   try {
     return JSON.parse(raw) as RunFormat;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Parse the JSON paragraph-format payload stamped onto a paragraph element. */
+function readParaFmtAttr(el: Element): ParaFormat | undefined {
+  const raw = el.getAttribute(EDIT_ATTR.paraFmt);
+  if (!raw) return undefined;
+  try {
+    return JSON.parse(raw) as ParaFormat;
   } catch {
     return undefined;
   }
@@ -64,9 +80,12 @@ function walk(nodes: Iterable<Node>, state: WalkState, out: Segment[], resolve: 
     if (!isElement(node)) continue;
 
     // Bullets and other generated decoration are marked uneditable and carry no
-    // run key — they are not content and must not become runs.
+    // run key — they are not content and must not become runs. Both the
+    // attribute and the property are checked: they reflect each other in a
+    // browser but not in every DOM implementation, and a bullet read back as
+    // text would be typed into the deck.
     const runKey = node.getAttribute(EDIT_ATTR.run);
-    if (!runKey && (node as HTMLElement).contentEditable === 'false') continue;
+    if (!runKey && isLocked(node as HTMLElement)) continue;
 
     if (node.tagName === 'BR') {
       out.push(segment('\n', state, true));
@@ -169,11 +188,12 @@ function dropTrailingFiller(el: Element): Node[] {
 
 function paragraphOf(el: Element, resolve: Resolver): ParaEdit {
   const src = resolve(el.getAttribute(EDIT_ATTR.para)) as Paragraph | undefined;
+  const format = readParaFmtAttr(el);
   const raw: Segment[] = [];
   // Walk the retained children rather than the element, so trailing filler is
   // excluded without mutating the live DOM.
   walk(dropTrailingFiller(el), {}, raw, resolve);
-  return { ...(src ? { src } : {}), segments: tidy(raw) };
+  return { ...(src ? { src } : {}), ...(format ? { format } : {}), segments: tidy(raw) };
 }
 
 /**

@@ -17,6 +17,8 @@ import { EditContext } from '../src/pptx/edit/context.js';
 import { reconcileTextBody } from '../src/pptx/edit/reconcile.js';
 import { renderTextBody, EDIT_ATTR } from '../src/pptx/text/render.js';
 import type { PresetShape, TextBody } from '../src/pptx/model.js';
+import { serializeNode } from '../src/oxml/xml.js';
+import type { ParaFormat, RunFormat } from '../src/oxml/edit/format.js';
 
 // jsdom has no ResizeObserver; the viewer only uses it to re-fit on resize.
 vi.stubGlobal(
@@ -67,6 +69,14 @@ function buildDeck(): Uint8Array {
             <a:p><a:fld id="{1}" type="datetime"><a:rPr sz="1200"/><a:t>1/1/2024</a:t></a:fld></a:p>
           </p:txBody>
         </p:sp>
+        <p:sp>
+          <p:nvSpPr><p:cNvPr id="4" name="Plain"/><p:cNvSpPr/><p:nvPr/></p:nvSpPr>
+          <p:spPr><a:xfrm><a:off x="0" y="3000000"/><a:ext cx="3000000" cy="1000000"/></a:xfrm></p:spPr>
+          <p:txBody><a:bodyPr/>
+            <a:p><a:r><a:rPr sz="1200"/><a:t>First</a:t></a:r></a:p>
+            <a:p><a:r><a:rPr sz="1200"/><a:t>Second</a:t></a:r></a:p>
+          </p:txBody>
+        </p:sp>
       </p:spTree></p:cSld></p:sld>`,
     ),
   });
@@ -115,11 +125,11 @@ describe('pptx edit — render markers', () => {
 
     const bullet = renderEditable(deck, 0).el.querySelector('span:not([data-cbx-run])');
     expect(bullet?.textContent).toBe('•');
-    expect((bullet as HTMLElement).contentEditable).toBe('false');
+    expect(bullet?.getAttribute('contenteditable')).toBe('false');
 
     const fieldRun = renderEditable(deck, 1).el.querySelector(`[${EDIT_ATTR.run}]`);
     expect(fieldRun?.textContent).toBe('1/1/2024');
-    expect((fieldRun as HTMLElement).contentEditable).toBe('false');
+    expect(fieldRun?.getAttribute('contenteditable')).toBe('false');
   });
 });
 
@@ -360,6 +370,413 @@ describe('pptx edit — viewer', () => {
 
     const reloaded = Deck.load(viewer['deck'].toBytes());
     expect(textOf(bodyAt(reloaded, 0))).toBe('Farewell World');
+  });
+});
+
+describe('pptx edit — staying in the box across a commit', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  /** The text body currently open for typing, if any. */
+  const openBody = () =>
+    container.querySelector<HTMLElement>(`[${EDIT_ATTR.body}][contenteditable="true"]`);
+
+  /** Enter the first shape's text and select `text` inside its first run. */
+  function enterAndSelect(viewer: Viewer, from: number, to: number): void {
+    const shape = (viewer as unknown as { deck: Deck }).deck.slides[0]!.shapes[0]!;
+    expect(viewer.editText(shape)).toBe(true);
+    const run = openBody()!.querySelector(`[${EDIT_ATTR.run}]`)!;
+    const range = document.createRange();
+    range.setStart(run.firstChild!, from);
+    range.setEnd(run.firstChild!, to);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function mount() {
+    const deck = Deck.load(buildDeck());
+    return { deck, viewer: new Viewer(deck, container, { editable: true, webFonts: false }) };
+  }
+
+  it('hands the box back after a formatting commit instead of ending the edit', () => {
+    const { viewer } = mount();
+    enterAndSelect(viewer, 2, 5);
+
+    expect(viewer.applyFormat({ italic: true })).toBe(true);
+
+    // The commit re-parsed the slide, so the body is a different object than the
+    // one that was opened — it has to be re-adopted by its XML node or the box
+    // comes back read-only and the user is silently ejected mid-word.
+    expect(openBody()).not.toBeNull();
+    expect(viewer.isEditingText).toBe(true);
+    viewer.destroy();
+  });
+
+  it('puts the caret back where it was, counting past the bullet', () => {
+    const { viewer } = mount();
+    // 'Hello ' with a bullet glyph rendered before it: the bullet is generated
+    // decoration, so it must not count towards the offset or the caret drifts
+    // by the width of the marker on every commit.
+    enterAndSelect(viewer, 2, 5);
+    expect(document.getSelection()!.toString()).toBe('llo');
+
+    viewer.applyFormat({ italic: true });
+
+    const sel = document.getSelection()!;
+    expect(sel.toString()).toBe('llo');
+    expect(openBody()!.contains(sel.getRangeAt(0).startContainer)).toBe(true);
+    viewer.destroy();
+  });
+
+  it('keeps the box open when focus moves into the toolbar', () => {
+    const { viewer } = mount();
+    // A dropdown takes focus when it opens. Treating that as "left the text"
+    // ended the session, so choosing a size applied to nothing.
+    const toolbar = document.createElement('div');
+    toolbar.setAttribute('data-cbx-toolbar', '');
+    const select = document.createElement('select');
+    toolbar.appendChild(select);
+    document.body.appendChild(toolbar);
+
+    enterAndSelect(viewer, 2, 5);
+    const body = openBody()!;
+    body.dispatchEvent(
+      new FocusEvent('focusout', { bubbles: true, relatedTarget: select }),
+    );
+
+    expect(openBody()).not.toBeNull();
+    expect(viewer.isEditingText).toBe(true);
+    // …and the command that follows still has its selection to act on.
+    expect(viewer.applyFormat({ italic: true })).toBe(true);
+    viewer.destroy();
+  });
+
+  it('reports the formatting of the text just changed, not its neighbour', () => {
+    const seen: RunFormat[] = [];
+    const deck = Deck.load(buildDeck());
+    const viewer = new Viewer(deck, container, {
+      editable: true,
+      webFonts: false,
+      onSelectionChange: (f) => seen.push(f),
+    });
+
+    // Select the whole of the second run ('World'). Restoring that selection
+    // must land inside it, not on the end of the run before it — the toolbar
+    // reads its state from where the selection starts, so landing on the
+    // boundary reported the *old* formatting and looked like a no-op.
+    const shape = (viewer as unknown as { deck: Deck }).deck.slides[0]!.shapes[0]!;
+    viewer.editText(shape);
+    const runs = openBody()!.querySelectorAll<HTMLElement>(`[${EDIT_ATTR.run}]`);
+    const range = document.createRange();
+    range.selectNodeContents(runs[1]!);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    viewer.applyFormat({ sizePt: 44 });
+
+    expect(seen.at(-1)?.sizePt).toBe(44);
+    viewer.destroy();
+  });
+
+  it('formats across two paragraphs without merging them or losing text', () => {
+    const { deck, viewer } = mount();
+    // The shape with two paragraphs, 'First' and 'Second'.
+    const shape = (viewer as unknown as { deck: Deck }).deck.slides[0]!.shapes[2]!;
+    expect(viewer.editText(shape)).toBe(true);
+
+    const body = openBody()!;
+    const paras = body.querySelectorAll<HTMLElement>(`[${EDIT_ATTR.para}]`);
+    const from = paras[0]!.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild as Text;
+    const to = paras[1]!.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(from, 2);
+    range.setEnd(to, 3);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+
+    expect(viewer.applyFormat({ bold: true })).toBe(true);
+
+    // One marker span per paragraph. A single span across the boundary would
+    // *move* the second paragraph's nodes into the first — merging the two and
+    // dropping the text where the boundary fell.
+    const after = bodyAt(deck, 2).paragraphs;
+    expect(after).toHaveLength(2);
+    expect(after.map((p) => p.runs.map((r) => r.text).join(''))).toEqual(['First', 'Second']);
+    // The formatting landed on both halves of the selection, and nowhere else.
+    const bolds = after.map((p) => p.runs.filter((r) => r.bold).map((r) => r.text).join(''));
+    expect(bolds).toEqual(['rst', 'Sec']);
+    // …and the text stays selected, so the next click formats it too.
+    expect(document.getSelection()!.toString().length).toBeGreaterThan(0);
+    viewer.destroy();
+  });
+
+  it('still commits on blur after a formatting commit', () => {
+    const { deck, viewer } = mount();
+    enterAndSelect(viewer, 2, 5);
+    viewer.applyFormat({ italic: true });
+
+    const body = openBody()!;
+    body.querySelector(`[${EDIT_ATTR.run}]`)!.textContent = 'Goodbye ';
+    body.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
+
+    expect(textOf(bodyAt(deck, 0))).toContain('Goodbye');
+    viewer.destroy();
+  });
+});
+
+describe('pptx edit — list and paragraph formatting', () => {
+  let container: HTMLElement;
+
+  beforeEach(() => {
+    document.body.innerHTML = '';
+    container = document.createElement('div');
+    document.body.appendChild(container);
+  });
+
+  const openBody = () =>
+    container.querySelector<HTMLElement>(`[${EDIT_ATTR.body}][contenteditable="true"]`)!;
+
+  function mount() {
+    const deck = Deck.load(buildDeck());
+    return { deck, viewer: new Viewer(deck, container, { editable: true, webFonts: false }) };
+  }
+
+  /** Open the shape's text and put a collapsed caret in paragraph `index`. */
+  function caretIn(viewer: Viewer, shapeIndex: number, index = 0): void {
+    const shape = (viewer as unknown as { deck: Deck }).deck.slides[0]!.shapes[shapeIndex]!;
+    expect(viewer.editText(shape)).toBe(true);
+    const para = openBody().querySelectorAll<HTMLElement>(`[${EDIT_ATTR.para}]`)[index]!;
+    const at = para.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild!;
+    const range = document.createRange();
+    range.setStart(at, 1);
+    range.collapse(true);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  /** Select across every paragraph of the open body. */
+  function selectAllParas(): void {
+    const paras = openBody().querySelectorAll<HTMLElement>(`[${EDIT_ATTR.para}]`);
+    const range = document.createRange();
+    range.setStartBefore(paras[0]!);
+    range.setEndAfter(paras[paras.length - 1]!);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  const paras = (deck: Deck, shapeIndex: number) => bodyAt(deck, shapeIndex).paragraphs;
+
+  it('bullets the paragraph the caret sits in, gutter included', () => {
+    const { deck, viewer } = mount();
+    caretIn(viewer, 2);
+
+    expect(viewer.toggleList('bullet')).toBe(true);
+
+    const para = paras(deck, 2)[0]!;
+    expect(para.bullet).toEqual({ type: 'char', char: '•', font: 'Arial' });
+    // A plain text box inherits no list geometry, so the hanging indent has to
+    // be written or the bullet renders inline instead of in a gutter.
+    expect(para.indentPx).toBeLessThan(0);
+    expect(para.marginLeftPx).toBeGreaterThan(0);
+    // The paragraph beside it is untouched.
+    expect(paras(deck, 2)[1]!.bullet).toBeUndefined();
+    viewer.destroy();
+  });
+
+  it('numbers a paragraph, and switching to bullets replaces the numbering', () => {
+    const { deck, viewer } = mount();
+    caretIn(viewer, 2);
+    viewer.toggleList('number');
+    expect(paras(deck, 2)[0]!.bullet).toMatchObject({ type: 'number', scheme: 'arabicPeriod' });
+
+    caretIn(viewer, 2);
+    viewer.toggleList('bullet');
+    // Bullet versus number is not a toggle: asking for the other kind switches.
+    expect(paras(deck, 2)[0]!.bullet).toMatchObject({ type: 'char' });
+    viewer.destroy();
+  });
+
+  it('turns a list off by stating it, so an inherited bullet cannot come back', () => {
+    const { deck, viewer } = mount();
+    // The title paragraph arrives bulleted.
+    expect(paras(deck, 0)[0]!.bullet).toEqual({ type: 'char', char: '•' });
+
+    caretIn(viewer, 0);
+    expect(viewer.toggleList('bullet')).toBe(true);
+
+    const para = paras(deck, 0)[0]!;
+    expect(para.bullet).toEqual({ type: 'none' });
+    // Deleting <a:buChar> would re-inherit the master's bullet; "off" is an
+    // override and has to be written as one.
+    expect(serializeNode(deck.sourceOf(para)!.node)).toContain('<a:buNone/>');
+    viewer.destroy();
+  });
+
+  it('applies to a whole selection all-or-nothing, as PowerPoint does', () => {
+    const { deck, viewer } = mount();
+    caretIn(viewer, 2);
+    selectAllParas();
+    viewer.toggleList('bullet');
+    expect(paras(deck, 2).map((p) => p.bullet?.type)).toEqual(['char', 'char']);
+
+    // Every paragraph already has it, so the same click turns it off for both.
+    caretIn(viewer, 2);
+    selectAllParas();
+    viewer.toggleList('bullet');
+    expect(paras(deck, 2).map((p) => p.bullet?.type)).toEqual(['none', 'none']);
+    viewer.destroy();
+  });
+
+  it('turns a mixed selection on rather than off', () => {
+    const { deck, viewer } = mount();
+    caretIn(viewer, 2, 1);
+    viewer.toggleList('bullet');
+    expect(paras(deck, 2).map((p) => p.bullet?.type)).toEqual([undefined, 'char']);
+
+    caretIn(viewer, 2);
+    selectAllParas();
+    viewer.toggleList('bullet');
+    // Only some of them had it, so the click adds it to the rest.
+    expect(paras(deck, 2).map((p) => p.bullet?.type)).toEqual(['char', 'char']);
+    viewer.destroy();
+  });
+
+  it('demotes with Tab and promotes with Shift+Tab, without cycling shapes', () => {
+    const { deck, viewer } = mount();
+    caretIn(viewer, 2);
+    const body = openBody();
+
+    body.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true }));
+    expect(paras(deck, 2)[0]!.level).toBe(1);
+    // Tab inside text must not reach the shape-cycling shortcut.
+    expect(viewer.selectedShapes).toHaveLength(0);
+
+    caretIn(viewer, 2);
+    openBody().dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true, cancelable: true }),
+    );
+    expect(paras(deck, 2)[0]!.level).toBe(0);
+    viewer.destroy();
+  });
+
+  it('stops at the last level instead of committing a no-op', () => {
+    const { viewer } = mount();
+    caretIn(viewer, 2);
+    for (let i = 0; i < 8; i++) {
+      caretIn(viewer, 2);
+      expect(viewer.indentSelection(1)).toBe(true);
+    }
+    caretIn(viewer, 2);
+    // Level 8 is as deep as PowerPoint goes; a further nudge changes nothing and
+    // must not leave an undo entry behind.
+    expect(viewer.indentSelection(1)).toBe(false);
+    viewer.destroy();
+  });
+
+  it('sets alignment and spacing on the caret’s paragraph', () => {
+    const { deck, viewer } = mount();
+    caretIn(viewer, 2);
+
+    expect(
+      viewer.applyParaFormat({ align: 'center', lineSpacingPct: 1.5, spaceBeforePt: 6 }),
+    ).toBe(true);
+
+    const para = paras(deck, 2)[0]!;
+    expect(para.align).toBe('ctr');
+    expect(para.lineSpacingPct).toBe(1.5);
+    expect(para.spaceBeforePt).toBe(6);
+    viewer.destroy();
+  });
+
+  it('reports the paragraph state to the toolbar, mixed properties omitted', () => {
+    const seen: ParaFormat[] = [];
+    const deck = Deck.load(buildDeck());
+    const viewer = new Viewer(deck, container, {
+      editable: true,
+      webFonts: false,
+      onParaSelectionChange: (f) => seen.push(f),
+    });
+
+    caretIn(viewer, 0);
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(seen.at(-1)).toMatchObject({ list: 'bullet', level: 0 });
+
+    // One bulleted paragraph, one not: the list kind is mixed and goes unreported.
+    caretIn(viewer, 2, 1);
+    viewer.toggleList('bullet');
+    caretIn(viewer, 2);
+    selectAllParas();
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(seen.at(-1)!.list).toBeUndefined();
+    expect(seen.at(-1)!.level).toBe(0);
+    viewer.destroy();
+  });
+
+  it('refuses a box that has not been entered, and a selection across two of them', () => {
+    const { viewer } = mount();
+    // Every body is addressable, but only the one the user entered is typeable —
+    // formatting a read-only box would be refused at the commit anyway.
+    expect(viewer.toggleList('bullet')).toBe(false);
+
+    caretIn(viewer, 2);
+    const bodies = container.querySelectorAll<HTMLElement>(`[${EDIT_ATTR.body}]`);
+    const range = document.createRange();
+    range.setStartBefore(bodies[0]!);
+    range.setEndAfter(bodies[bodies.length - 1]!);
+    const sel = document.getSelection()!;
+    sel.removeAllRanges();
+    sel.addRange(range);
+    // Each body commits on its own, so a range across two is refused rather
+    // than half-applied.
+    expect(viewer.toggleList('bullet')).toBe(false);
+    viewer.destroy();
+  });
+
+  it('clears the toolbar when the caret leaves the text', () => {
+    const runSeen: RunFormat[] = [];
+    const paraSeen: ParaFormat[] = [];
+    const deck = Deck.load(buildDeck());
+    const viewer = new Viewer(deck, container, {
+      editable: true,
+      webFonts: false,
+      onSelectionChange: (f) => runSeen.push(f),
+      onParaSelectionChange: (f) => paraSeen.push(f),
+    });
+
+    caretIn(viewer, 0);
+    document.dispatchEvent(new Event('selectionchange'));
+    expect(paraSeen.at(-1)!.list).toBe('bullet');
+    expect(runSeen.at(-1)!.sizePt).toBe(24);
+
+    viewer.exitTextEditing();
+
+    // Nothing is being typed in any more, so nothing is in effect. Leaving the
+    // last state behind leaves buttons lit and outlined for text the user has
+    // moved on from.
+    expect(paraSeen.at(-1)).toEqual({});
+    expect(runSeen.at(-1)).toEqual({});
+    viewer.destroy();
+  });
+
+  it('undoes a list change in one step', () => {
+    const { deck, viewer } = mount();
+    caretIn(viewer, 0);
+    viewer.toggleList('number');
+    expect(paras(deck, 0)[0]!.bullet!.type).toBe('number');
+
+    viewer.undo();
+    expect(paras(deck, 0)[0]!.bullet).toEqual({ type: 'char', char: '•' });
+    viewer.destroy();
   });
 });
 

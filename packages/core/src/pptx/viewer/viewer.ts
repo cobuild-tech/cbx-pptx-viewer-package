@@ -22,12 +22,23 @@ import { installWebFonts, type WebFontOptions } from '../render/webfonts.js';
 import { EditContext } from '../edit/context.js';
 import { EditSession } from '../edit/session.js';
 import { reconcileTextBody } from '../edit/reconcile.js';
-import { applyFormatToSelection, bodyElementOf, formatAtSelection } from '../../oxml/edit/selection.js';
+import {
+  applyFormatToSelection,
+  bodyElementOf,
+  formatAtSelection,
+  paraFormatAtSelection,
+  paragraphsInSelection,
+  readCaretAddress,
+  restoreCaretAddress,
+  stampParaFormat,
+  type CaretAddress,
+} from '../../oxml/edit/selection.js';
 import { installEditStyles } from '../../oxml/edit/styles.js';
 import { readRunFormat } from '../edit/format.js';
-import type { RunFormat } from '../../oxml/edit/format.js';
+import { clampLevel, readParaFormat } from '../edit/paraProps.js';
+import { isEmptyFormat, type ParaFormat, type RunFormat } from '../../oxml/edit/format.js';
 import { EDIT_ATTR } from '../text/render.js';
-import type { Shape, TextBody, Transform } from '../model.js';
+import type { Paragraph, Shape, TextBody, Transform } from '../model.js';
 import type { XmlNode } from '../../oxml/xml.js';
 import type { ZOrderMove } from '../edit/shapeOps.js';
 import { moveBox } from '../edit/geometry.js';
@@ -70,6 +81,12 @@ export interface ViewerOptions {
   /** Called when the caret moves, with the formatting in effect there. */
   onSelectionChange?: (format: RunFormat) => void;
   /**
+   * Called when the caret moves, with the *paragraph* formatting in effect —
+   * list kind, level, alignment, spacing. Properties the selected paragraphs
+   * disagree about are omitted rather than guessed.
+   */
+  onParaSelectionChange?: (format: ParaFormat) => void;
+  /**
    * Select, move, resize, rotate, restack and delete the slide's own shapes.
    * Defaults to `editable`; pass `false` to keep text editing without direct
    * manipulation.
@@ -102,7 +119,11 @@ export class Viewer {
   private session: EditSession | null = null;
   private readonly onEdit: ViewerOptions['onEdit'];
   private readonly onSelectionChange: ViewerOptions['onSelectionChange'];
+  private readonly onParaSelectionChange: ViewerOptions['onParaSelectionChange'];
   private focusOutHandler: ((e: FocusEvent) => void) | null = null;
+  private leaveTextHandler: ((e: PointerEvent) => void) | null = null;
+  /** True while a commit is re-rendering, so its own focus churn is ignored. */
+  private committing = false;
   private selectionHandler: (() => void) | null = null;
   private disposeStyles: (() => void) | null = null;
   private selection: ShapeSelection | null = null;
@@ -120,6 +141,7 @@ export class Viewer {
     this.editable = options.editable ?? false;
     if (options.onEdit) this.onEdit = options.onEdit;
     if (options.onSelectionChange) this.onSelectionChange = options.onSelectionChange;
+    if (options.onParaSelectionChange) this.onParaSelectionChange = options.onParaSelectionChange;
     if (options.onShapeSelectionChange) this.onShapeSelectionChange = options.onShapeSelectionChange;
     if (this.editable) {
       this.editCtx = new EditContext(deck, options.startIndex ?? 0);
@@ -233,6 +255,7 @@ export class Viewer {
     this.applyScale();
     this.selection?.refresh();
     this.strip?.setActive(this.index);
+    this.reportFormatState();
     this.onChange?.(this.index, this.count);
   }
 
@@ -290,6 +313,16 @@ export class Viewer {
       if (e.key === 'Escape' && this.isEditingText) {
         e.preventDefault();
         this.exitTextEditing();
+        return;
+      }
+      // Inside text Tab changes the list level, as it does in PowerPoint's
+      // outline. preventDefault matters twice over: without it the browser moves
+      // focus out of the box, and the focusout that follows commits a second
+      // time. (PowerPoint inserts a literal tab mid-paragraph; we always
+      // demote, which is the gesture people actually use.)
+      if (e.key === 'Tab' && this.isEditingTarget(e.target)) {
+        e.preventDefault();
+        this.indentSelection(e.shiftKey ? -1 : 1);
         return;
       }
       // Arrows, space and Home/End all mean something else inside text. Without
@@ -449,8 +482,22 @@ export class Viewer {
     // body on the same slide, which focusout reports and blur does not.
     this.focusOutHandler = (e: FocusEvent) => {
       if (!this.slideEl) return;
-      const from = bodyElementOf(e.target as Node | null, this.slideEl);
+      // A commit re-renders the slide, which detaches the box that had focus and
+      // fires focusout on a node no longer in the document. Acting on that would
+      // tear down the very editing session the commit just handed back — the bug
+      // that made every toolbar click throw the user out of the text box.
+      if (this.committing) return;
+      const target = e.target instanceof Node ? e.target : null;
+      if (!target || !this.slideEl.contains(target)) return;
+      const from = bodyElementOf(target, this.slideEl);
       if (!from) return;
+      // Focus moving into the editor's own chrome — a toolbar dropdown, a colour
+      // well — is not leaving the text. The command that follows still needs the
+      // session *and* the selection it acts on, and the browser keeps the
+      // selection alive while another control has focus.
+      if (e.relatedTarget instanceof Element && e.relatedTarget.closest(`[${EDIT_ATTR.chrome}]`)) {
+        return;
+      }
       const to = e.relatedTarget instanceof Node ? bodyElementOf(e.relatedTarget, this.slideEl) : null;
       if (to === from) return;
       // Drop the text-editing state *before* committing, so the re-render the
@@ -465,16 +512,63 @@ export class Viewer {
     };
     this.container.addEventListener('focusout', this.focusOutHandler, true);
 
-    if (this.onSelectionChange) {
-      this.selectionHandler = () => {
-        if (!this.slideEl || !this.editCtx) return;
-        const sel = this.container.ownerDocument.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
-        if (!bodyElementOf(sel.getRangeAt(0).startContainer, this.slideEl)) return;
-        this.onSelectionChange?.(formatAtSelection(this.slideEl, (k) => this.editCtx?.resolve(k), readRunFormat));
-      };
+    // Clicking anywhere but the box being typed in leaves it, as in PowerPoint.
+    // Without this a user whose focus sits in a toolbar dropdown (see above) has
+    // no way back out to selecting shapes.
+    this.leaveTextHandler = (e: PointerEvent) => {
+      if (!this.editCtx?.editingBody || !this.slideEl || this.committing) return;
+      const target = e.target instanceof Node ? e.target : null;
+      const open = this.slideEl.querySelector<HTMLElement>(
+        `[${EDIT_ATTR.body}][contenteditable="true"]`,
+      );
+      if (target && open && open.contains(target)) return;
+      this.exitTextEditing();
+    };
+    this.container.addEventListener('pointerdown', this.leaveTextHandler, true);
+
+    // One listener feeds both toolbar channels — character state and paragraph
+    // state move together, and a second listener would only fire twice.
+    if (this.onSelectionChange || this.onParaSelectionChange) {
+      this.selectionHandler = () => this.reportFormatState();
       this.container.ownerDocument.addEventListener('selectionchange', this.selectionHandler);
     }
+  }
+
+  /**
+   * Tell the toolbar what formatting is in effect at the caret.
+   *
+   * Driven by `selectionchange`, but also pushed after a commit: restoring the
+   * same range the user already had does not always raise that event, and a
+   * toolbar still showing the size the text had *before* the change reads as a
+   * command that did not work.
+   */
+  private reportFormatState(): void {
+    if (!this.editCtx) return;
+    if (!this.onSelectionChange && !this.onParaSelectionChange) return;
+    const sel = this.container.ownerDocument.getSelection();
+    const range = sel && sel.rangeCount > 0 ? sel.getRangeAt(0) : null;
+    // The selection must be in the *live* slide: after a re-render the old nodes
+    // still answer "yes, I am a text body", and trusting that would report the
+    // formatting of text that is no longer on screen.
+    const inText =
+      !!range &&
+      !!this.slideEl &&
+      this.slideEl.contains(range.startContainer) &&
+      !!bodyElementOf(range.startContainer, this.slideEl);
+    if (!inText || !this.slideEl) {
+      // The caret has left the text — another shape is selected, or the slide
+      // changed. Nothing is in effect, so say so: leaving the toolbar lit with
+      // the formatting of text the user has since left makes a button look
+      // stuck on, as though the command were still applying.
+      this.onSelectionChange?.({});
+      this.onParaSelectionChange?.({});
+      return;
+    }
+    const resolve = (k: string | null | undefined) => this.editCtx?.resolve(k);
+    this.onSelectionChange?.(formatAtSelection(this.slideEl, resolve, readRunFormat));
+    this.onParaSelectionChange?.(
+      paraFormatAtSelection(this.slideEl, resolve, (p) => readParaFormat(p as Paragraph)),
+    );
   }
 
   /** Read one edited text body back into the XML and re-render the slide. */
@@ -483,13 +577,30 @@ export class Viewer {
     const body = this.editCtx.resolve(bodyEl.getAttribute(EDIT_ATTR.body)) as TextBody | undefined;
     if (!body) return false;
 
+    // A commit that happens *while* the user is still typing — the formatting
+    // toolbar, a list toggle — has to hand the box back afterwards. The commit
+    // re-parses the slide, so the body becomes a new object and the caret's
+    // nodes cease to exist; the XML node and a character offset are the two
+    // handles that survive. (The blur path drops the editing state first, so
+    // there is nothing to hand back and this does nothing.)
+    const keepOpen = this.editCtx.editingBody === body;
+    const node = keepOpen ? this.deck.sourceOf(body)?.node : undefined;
+    const caret = keepOpen ? readCaretAddress(bodyEl) : null;
+
     const paras = reconcileTextBody(bodyEl, (k) => this.editCtx?.resolve(k));
     const slide = this.session.commitTextBody(this.index, body, paras);
     if (!slide) return false;
-    // Re-render so the committed XML — not the browser's improvised markup — is
-    // what the user is looking at.
-    this.strip?.refresh(this.index);
-    this.goTo(this.index);
+    if (node) this.editCtx.setTextEditing(this.deck.bodyForNode(this.index, node) ?? null);
+    this.committing = true;
+    try {
+      // Re-render so the committed XML — not the browser's improvised markup —
+      // is what the user is looking at.
+      this.strip?.refresh(this.index);
+      this.goTo(this.index);
+      if (caret) this.restoreCaret(caret);
+    } finally {
+      this.committing = false;
+    }
     return true;
   }
 
@@ -506,6 +617,77 @@ export class Viewer {
     if (!this.editable || !this.slideEl) return false;
     const bodyEl = applyFormatToSelection(this.slideEl, format);
     return bodyEl ? this.commitBody(bodyEl) : false;
+  }
+
+  // ─── Paragraph formatting ──────────────────────────────────────────────────
+
+  /**
+   * Apply paragraph formatting — alignment, spacing, an explicit list kind or
+   * level — to every paragraph the selection touches, and commit it.
+   *
+   * Values are absolute. A paragraph command works from a bare caret, since the
+   * paragraph the caret sits in *is* the target, which is why this cannot go
+   * through {@link applyFormat}'s span-wrapping path.
+   */
+  applyParaFormat(format: ParaFormat): boolean {
+    return this.formatParagraphs(() => format);
+  }
+
+  /**
+   * Turn the selected paragraphs into a bulleted or numbered list, or out of one.
+   *
+   * PowerPoint's rule, which surprises people who expect per-paragraph
+   * toggling: the click turns the list *off* only when every selected paragraph
+   * already has that kind; otherwise it turns it on for all of them. Bullet
+   * versus number is not a toggle at all — asking for numbers on a mixed
+   * selection numbers everything.
+   */
+  toggleList(kind: 'bullet' | 'number'): boolean {
+    return this.formatParagraphs((_para, all) => {
+      const everyOne = all.length > 0 && all.every((p) => p && readParaFormat(p).list === kind);
+      return { list: everyOne ? 'none' : kind };
+    });
+  }
+
+  /**
+   * Demote (`+1`) or promote (`-1`) each selected paragraph, clamped to the nine
+   * levels PowerPoint offers. Per paragraph rather than all-or-nothing, so a
+   * mixed selection keeps its shape; a paragraph already at the end simply does
+   * not move.
+   */
+  indentSelection(delta: number): boolean {
+    return this.formatParagraphs((para) => {
+      const from = para?.level ?? 0;
+      const to = clampLevel(from + delta);
+      return to === from ? {} : { level: to };
+    });
+  }
+
+  /**
+   * Stamp a paragraph format onto each paragraph in the selection and commit.
+   * `make` sees the paragraph it is deciding for and the whole set, which is
+   * what an all-or-nothing toggle needs.
+   */
+  private formatParagraphs(
+    make: (para: Paragraph | undefined, all: Array<Paragraph | undefined>) => ParaFormat,
+  ): boolean {
+    if (!this.editable || !this.slideEl || !this.editCtx) return false;
+    const found = paragraphsInSelection(this.slideEl);
+    if (!found) return false;
+
+    const models = found.paras.map(
+      (el) => this.editCtx?.resolve(el.getAttribute(EDIT_ATTR.para)) as Paragraph | undefined,
+    );
+    let any = false;
+    found.paras.forEach((el, i) => {
+      const format = make(models[i], models);
+      if (isEmptyFormat(format)) return;
+      stampParaFormat(el, format);
+      any = true;
+    });
+    // Nothing to write — a nudge past the last level, say — must not leave an
+    // undo entry that undoes nothing.
+    return any ? this.commitBody(found.body) : false;
   }
 
 
@@ -528,6 +710,8 @@ export class Viewer {
         // that act on a selection are bound to the container. Without this,
         // Delete and the arrow keys would go to the page instead.
         if (shapes.length) this.container.focus();
+        // Selecting a shape is not being in its text: clear the text toolbar.
+        this.reportFormatState();
         this.onShapeSelectionChange?.(shapes);
       },
       onCommit: (edits) => this.commitShapes(edits),
@@ -690,6 +874,21 @@ export class Viewer {
   }
 
   /**
+   * Put the caret back in the box the user is typing in, after a commit
+   * re-rendered it. Focus goes with it: the re-render replaced the element that
+   * had it, so without this the next keystroke would go to the page.
+   */
+  private restoreCaret(at: CaretAddress): void {
+    const el = this.slideEl?.querySelector<HTMLElement>(
+      `[${EDIT_ATTR.body}][contenteditable="true"]`,
+    );
+    if (!el) return;
+    el.focus();
+    restoreCaretAddress(el, at);
+    this.reportFormatState();
+  }
+
+  /**
    * Leave text editing and go back to selecting shapes, keeping whatever was
    * typed — Escape ends the edit in PowerPoint, it does not revert it.
    */
@@ -700,6 +899,7 @@ export class Viewer {
     this.selection?.setEnabled(true);
     if (!committed) this.goTo(this.index);
     this.container.focus();
+    this.reportFormatState();
   }
 
   /** True while a text body is open for typing. */
@@ -785,6 +985,9 @@ export class Viewer {
     if (this.keyHandler) this.container.removeEventListener('keydown', this.keyHandler);
     if (this.focusOutHandler) {
       this.container.removeEventListener('focusout', this.focusOutHandler, true);
+    }
+    if (this.leaveTextHandler) {
+      this.container.removeEventListener('pointerdown', this.leaveTextHandler, true);
     }
     if (this.selectionHandler) {
       this.container.ownerDocument.removeEventListener('selectionchange', this.selectionHandler);

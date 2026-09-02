@@ -14,16 +14,48 @@
         color: #e6e6e6;
       }
       #editor { padding: 16px 20px; }
+      /* The ribbon: named groups of icons, laid out like PowerPoint's Home tab. */
       #editbar {
-        display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
-        padding: 8px; background: #2a2a3e; border-radius: 8px 8px 0 0;
+        display: flex; align-items: stretch; flex-wrap: wrap;
+        padding: 4px 8px; background: #f3f2f1; color: #323130;
+        border-bottom: 1px solid #d2d0ce; border-radius: 8px 8px 0 0;
+        font: 13px "Segoe UI", system-ui, sans-serif;
       }
-      #editbar button, #editbar select, #editbar input {
-        padding: 4px 9px; border-radius: 6px; border: 1px solid #555;
-        background: #3a3a4e; color: #e6e6e6; cursor: pointer; font: inherit;
+      #editbar .grp {
+        display: flex; flex-direction: column; align-items: center; gap: 2px;
+        padding: 2px 8px; border-right: 1px solid #d2d0ce;
+      }
+      #editbar .grp:last-child { border-right: none; }
+      #editbar .grp > .row { display: flex; align-items: center; gap: 2px; }
+      #editbar .grp > .cap { font-size: 10px; line-height: 1; color: #605e5c; user-select: none; }
+      #editbar .at-end { margin-left: auto; }
+      #editbar button {
+        display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+        width: 28px; height: 26px; padding: 0;
+        border: 1px solid transparent; border-radius: 4px;
+        background: transparent; color: #323130; cursor: pointer; font: inherit;
+      }
+      #editbar button.wide { width: auto; padding: 0 10px; }
+      #editbar button:hover:not(:disabled) { background: #e1dfdd; }
+      #editbar button[aria-pressed="true"] {
+        background: #c7e0f4; border-color: #0f6cbd; color: #0f4f8b;
+      }
+      #editbar button.primary {
+        background: #b7472a; border-color: #b7472a; color: #fff; width: auto; padding: 0 10px;
       }
       #editbar button:disabled { opacity: .4; cursor: default; }
-      #editbar .sep { width: 1px; align-self: stretch; background: #555; margin: 0 3px; }
+      #editbar select {
+        height: 24px; padding: 0 4px; border: 1px solid #8a8886; border-radius: 3px;
+        background: #fff; color: #323130; font: inherit; cursor: pointer;
+      }
+      #editbar input[type="color"] {
+        width: 28px; height: 26px; padding: 1px; border: 1px solid #8a8886;
+        border-radius: 3px; background: #fff; cursor: pointer;
+      }
+      #editbar svg { width: 16px; height: 16px; fill: none; stroke: currentColor;
+        stroke-width: 1.5; stroke-linecap: round; }
+      #editbar svg .solid { fill: currentColor; stroke: none;
+        font-family: "Segoe UI", system-ui, sans-serif; }
       #stage { height: 60vh; background: #525659; border-radius: 0 0 8px 8px; overflow: hidden; }
       .hint { color: #9a9ab0; font-size: 13px; }
       header {
@@ -60,32 +92,114 @@
     </header>
     <div id="drop">Drop a <code>.pptx</code> file here, or use the picker above.</div>
     <div id="editor" hidden>
-      <div id="editbar">
-        <button data-fmt="bold"><b>B</b></button>
-        <button data-fmt="italic"><i>I</i></button>
-        <button data-fmt="underline"><u>U</u></button>
-        <button data-fmt="strike"><s>S</s></button>
-        <select id="size" title="Font size"></select>
-        <input type="color" id="color" title="Text colour" />
-        <span class="sep"></span>
-        <button id="undo" title="Undo">&#8630;</button>
-        <button id="redo" title="Redo">&#8631;</button>
-        <span class="sep"></span>
-        <span id="sel" class="hint">no shape selected</span>
-        <button id="front" title="Bring forward (Ctrl+])">&uarr;</button>
-        <button id="back" title="Send backward (Ctrl+[)">&darr;</button>
-        <button id="delshape" title="Delete shape (Del)">Delete shape</button>
-        <span class="sep"></span>
-        <button id="prev">&lsaquo; Prev</button>
-        <span id="pos">— / —</span>
-        <button id="next">Next &rsaquo;</button>
-        <span class="sep"></span>
-        <button id="download">Download .pptx</button>
+      <div id="editbar" data-cbx-toolbar>
+        <div class="grp">
+          <div class="row">
+            <select id="font" title="Font" style="width: 124px"></select>
+            <select id="size" title="Font size" style="width: 56px"></select>
+            <button data-fmt="bold" title="Bold" aria-label="Bold">
+              <svg viewBox="0 0 16 16"><path d="M4.5 2.5h4a2.5 2.5 0 0 1 0 5h-4z"/><path d="M4.5 7.5h4.8a3 3 0 0 1 0 6H4.5z"/></svg>
+            </button>
+            <button data-fmt="italic" title="Italic" aria-label="Italic">
+              <svg viewBox="0 0 16 16"><line x1="6.5" y1="2.5" x2="12" y2="2.5"/><line x1="4" y1="13.5" x2="9.5" y2="13.5"/><line x1="9.5" y1="2.5" x2="6.5" y2="13.5"/></svg>
+            </button>
+            <button data-fmt="underline" title="Underline" aria-label="Underline">
+              <svg viewBox="0 0 16 16"><path d="M4.5 2.5v5a3.5 3.5 0 0 0 7 0v-5"/><line x1="3.5" y1="13.5" x2="12.5" y2="13.5"/></svg>
+            </button>
+            <button data-fmt="strike" title="Strikethrough" aria-label="Strikethrough">
+              <svg viewBox="0 0 16 16"><path d="M11.5 4.2A3.4 3.4 0 0 0 8 2.5c-2 0-3.2 1-3.2 2.4 0 1.2.9 1.9 2.4 2.3"/><path d="M4.5 11.6A3.6 3.6 0 0 0 8 13.5c2.1 0 3.4-1 3.4-2.5 0-1-.5-1.7-1.6-2.2"/><line x1="2.5" y1="8" x2="13.5" y2="8"/></svg>
+            </button>
+            <input type="color" id="color" title="Font colour" />
+          </div>
+          <div class="cap">Font</div>
+        </div>
+
+        <div class="grp">
+          <div class="row">
+            <button data-list="bullet" title="Bulleted list" aria-label="Bulleted list">
+              <svg viewBox="0 0 16 16"><circle class="solid" cx="3" cy="4" r="1.1"/><circle class="solid" cx="3" cy="8" r="1.1"/><circle class="solid" cx="3" cy="12" r="1.1"/><line x1="6" y1="4" x2="14" y2="4"/><line x1="6" y1="8" x2="14" y2="8"/><line x1="6" y1="12" x2="14" y2="12"/></svg>
+            </button>
+            <button data-list="number" title="Numbered list" aria-label="Numbered list">
+              <svg viewBox="0 0 16 16"><text class="solid" x="0" y="4.9" font-size="6.5" font-weight="700">1</text><text class="solid" x="0" y="9.3" font-size="6.5" font-weight="700">2</text><text class="solid" x="0" y="13.7" font-size="6.5" font-weight="700">3</text><line x1="6" y1="3" x2="14" y2="3"/><line x1="6" y1="7.5" x2="14" y2="7.5"/><line x1="6" y1="12" x2="14" y2="12"/></svg>
+            </button>
+            <button data-indent="-1" title="Decrease indent (Shift+Tab)" aria-label="Decrease indent">
+              <svg viewBox="0 0 16 16"><line x1="7" y1="3.5" x2="14" y2="3.5"/><line x1="7" y1="8" x2="14" y2="8"/><line x1="7" y1="12.5" x2="14" y2="12.5"/><path class="solid" d="M4.5 5.5 2 8l2.5 2.5z"/></svg>
+            </button>
+            <button data-indent="1" title="Increase indent (Tab)" aria-label="Increase indent">
+              <svg viewBox="0 0 16 16"><line x1="7" y1="3.5" x2="14" y2="3.5"/><line x1="7" y1="8" x2="14" y2="8"/><line x1="7" y1="12.5" x2="14" y2="12.5"/><path class="solid" d="M2 5.5 4.5 8 2 10.5z"/></svg>
+            </button>
+            <button data-algn="left" title="Align left" aria-label="Align left">
+              <svg viewBox="0 0 16 16"><line x1="2" y1="3.5" x2="14" y2="3.5"/><line x1="2" y1="6.5" x2="10" y2="6.5"/><line x1="2" y1="9.5" x2="14" y2="9.5"/><line x1="2" y1="12.5" x2="9" y2="12.5"/></svg>
+            </button>
+            <button data-algn="center" title="Centre" aria-label="Centre">
+              <svg viewBox="0 0 16 16"><line x1="2" y1="3.5" x2="14" y2="3.5"/><line x1="4" y1="6.5" x2="12" y2="6.5"/><line x1="2" y1="9.5" x2="14" y2="9.5"/><line x1="4.5" y1="12.5" x2="11.5" y2="12.5"/></svg>
+            </button>
+            <button data-algn="right" title="Align right" aria-label="Align right">
+              <svg viewBox="0 0 16 16"><line x1="2" y1="3.5" x2="14" y2="3.5"/><line x1="6" y1="6.5" x2="14" y2="6.5"/><line x1="2" y1="9.5" x2="14" y2="9.5"/><line x1="7" y1="12.5" x2="14" y2="12.5"/></svg>
+            </button>
+            <button data-algn="justify" title="Justify" aria-label="Justify">
+              <svg viewBox="0 0 16 16"><line x1="2" y1="3.5" x2="14" y2="3.5"/><line x1="2" y1="6.5" x2="14" y2="6.5"/><line x1="2" y1="9.5" x2="14" y2="9.5"/><line x1="2" y1="12.5" x2="14" y2="12.5"/></svg>
+            </button>
+            <select id="linespc" title="Line spacing" style="width: 92px"></select>
+            <select id="spcbef" title="Space before paragraph" style="width: 96px"></select>
+          </div>
+          <div class="cap">Paragraph</div>
+        </div>
+
+        <div class="grp">
+          <div class="row">
+            <span id="sel" class="hint" style="color: #605e5c; padding: 0 4px">None selected</span>
+            <button id="front" title="Bring forward (Ctrl+])" aria-label="Bring forward">
+              <svg viewBox="0 0 16 16"><rect x="2.5" y="2.5" width="7" height="7" rx="1"/><path d="M6.5 13.5h7v-7"/></svg>
+            </button>
+            <button id="back" title="Send backward (Ctrl+[)" aria-label="Send backward">
+              <svg viewBox="0 0 16 16"><rect x="6.5" y="6.5" width="7" height="7" rx="1"/><path d="M9.5 2.5h-7v7"/></svg>
+            </button>
+            <button id="delshape" title="Delete shape (Del)" aria-label="Delete shape">
+              <svg viewBox="0 0 16 16"><path d="M3.5 4.5h9"/><path d="M5.5 4.5V3h5v1.5"/><path d="M4.5 4.5 5 13.5h6l.5-9"/></svg>
+            </button>
+          </div>
+          <div class="cap">Shape</div>
+        </div>
+
+        <div class="grp">
+          <div class="row">
+            <button id="prev" class="wide" title="Previous slide">&lsaquo;</button>
+            <span id="pos" style="min-width: 62px; text-align: center">— / —</span>
+            <button id="next" class="wide" title="Next slide">&rsaquo;</button>
+            <button id="delslide" class="wide" title="Delete this slide">Delete</button>
+          </div>
+          <div class="cap">Slides</div>
+        </div>
+
+        <div class="grp at-end">
+          <div class="row">
+            <button id="undo" title="Undo" aria-label="Undo">
+              <svg viewBox="0 0 16 16"><path d="M3 8h6.5a3.5 3.5 0 0 1 0 7H6"/><path d="M5.5 5 2.5 8l3 3"/></svg>
+            </button>
+            <button id="redo" title="Redo" aria-label="Redo">
+              <svg viewBox="0 0 16 16"><path d="M13 8H6.5a3.5 3.5 0 0 0 0 7H10"/><path d="M10.5 5l3 3-3 3"/></svg>
+            </button>
+          </div>
+          <div class="cap">Undo</div>
+        </div>
+
+        <div class="grp">
+          <div class="row">
+            <button id="download" class="primary" title="Download the edited deck">
+              <svg viewBox="0 0 16 16"><path d="M8 2.5v8"/><path d="M5 7.5 8 10.5l3-3"/><path d="M2.5 12.5h11"/></svg>
+              Download .pptx
+            </button>
+          </div>
+          <div class="cap">File</div>
+        </div>
       </div>
       <div id="stage"></div>
       <p class="hint">
-        Click any text on the slide and type. Text inherited from the layout or
-        master is read-only. Select text and use the buttons to format it.
+        Click a shape to select it, click again to type in it. Text inherited
+        from the layout or master is read-only. Select text and use the buttons
+        to format it; the list, indent, alignment and spacing buttons act on
+        whole paragraphs, and Tab / Shift+Tab change the list level.
       </p>
     </div>
     <div id="info"></div>

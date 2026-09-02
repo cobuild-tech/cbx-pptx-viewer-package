@@ -18,7 +18,8 @@ import {
 } from '../../oxml/xml.js';
 import type { Paragraph, TextRun } from '../model.js';
 import { applyFormat, stripHyperlink } from './format.js';
-import { isEmptyFormat, type RunFormat } from '../../oxml/edit/format.js';
+import { applyParaFormat, ensureParaProps, resolvedOf } from './paraProps.js';
+import { isEmptyFormat, type ParaFormat, type RunFormat } from '../../oxml/edit/format.js';
 
 /** One contiguous stretch of text that shares formatting. */
 export interface Segment {
@@ -36,6 +37,12 @@ export interface ParaEdit {
   /** The model paragraph this maps to; undefined for a newly created one. */
   src?: Paragraph;
   segments: Segment[];
+  /**
+   * Paragraph-level formatting the toolbar asked for — list, level, alignment,
+   * spacing. Applied to this paragraph's own `<a:pPr>`, so the two halves of an
+   * Enter-split can be formatted independently even though they share a source.
+   */
+  format?: ParaFormat;
 }
 
 /** Resolves a model object back to the XML node it was parsed from. */
@@ -126,6 +133,18 @@ function buildParaNode(pe: ParaEdit, lookup: SourceLookup, prefix: string): XmlN
 
   const pPr = srcNode ? child(srcNode, 'pPr') : undefined;
   if (pPr) pNode.children.push(cloneNode(pPr));
+
+  // Paragraph formatting is applied to the *clone*, so the source tree is never
+  // touched, and the element is created when the paragraph stated no properties
+  // of its own — which is the common case.
+  if (pe.format && !isEmptyFormat(pe.format)) {
+    applyParaFormat(
+      ensureParaProps(pNode, prefix),
+      pe.format,
+      prefix,
+      pe.src ? resolvedOf(pe.src) : undefined,
+    );
+  }
 
   for (const seg of pe.segments) {
     if (!seg.isBreak && seg.text.length === 0) continue;
