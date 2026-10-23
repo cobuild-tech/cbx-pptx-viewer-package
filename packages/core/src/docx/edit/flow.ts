@@ -12,7 +12,7 @@
  * saved file is identical either way. Explicit page breaks still render, as a
  * visible rule rather than a real page boundary.
  */
-import { renderBlock, SHEET_FONT, type RenderDeps } from '../render/dom.js';
+import { renderBlock, stackBlocks, applyWordTextDefaults, SHEET_FONT, type RenderDeps } from '../render/dom.js';
 import type { DocxSection } from '../model.js';
 
 /** Class on the flow container, so the viewer can find and restyle it. */
@@ -42,6 +42,8 @@ export function renderFlow(sections: DocxSection[], deps: RenderDeps): HTMLEleme
     sheet.style.fontFamily = SHEET_FONT.fontFamily;
     sheet.style.fontSize = SHEET_FONT.fontSize;
     sheet.style.lineHeight = SHEET_FONT.lineHeight;
+    stackBlocks(sheet);
+    applyWordTextDefaults(sheet);
     // Headers and footers belong to the page furniture, which continuous flow
     // has none of; they stay read-only in the paginated view.
     for (const block of section.blocks) {

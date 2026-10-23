@@ -12,6 +12,9 @@ export const DocxRelType = {
   Image: `${OFFICE}/image`,
   Hyperlink: `${OFFICE}/hyperlink`,
   Settings: `${OFFICE}/settings`,
+  Footnotes: `${OFFICE}/footnotes`,
+  Endnotes: `${OFFICE}/endnotes`,
+  Comments: `${OFFICE}/comments`,
 } as const;
 
 export type DocxRelTypeValue = (typeof DocxRelType)[keyof typeof DocxRelType];

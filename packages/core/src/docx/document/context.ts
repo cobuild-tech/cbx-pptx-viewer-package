@@ -8,7 +8,8 @@ import type { Relationship } from '../../oxml/package.js';
 import type { XmlNode } from '../../oxml/xml.js';
 import type { StyleTable } from '../styles/styles.js';
 import type { Numbering } from '../numbering/numbering.js';
-import type { DocxBlock } from '../model.js';
+import type { DocxBlock, DocxComment } from '../model.js';
+import type { ColorContext } from '../../oxml/drawingml/color.js';
 
 /**
  * Where a model object came from in the XML.
@@ -33,9 +34,40 @@ export interface DocxSource {
  */
 export type DocxSourceSink = (model: object, src: DocxSource) => void;
 
+/** Document-wide layout settings from word/settings.xml. */
+export interface DocxSettings {
+  /** Interval of the default tab stops (<w:defaultTabStop>), in px. */
+  defaultTabPx: number;
+  /**
+   * <w:compatSetting w:name="compatibilityMode">: 15 for Word 2013+, lower for
+   * documents laid out with an older Word's rules.
+   */
+  compatMode: number;
+  /** <w:evenAndOddHeaders>: even-numbered pages use the "even" header/footer. */
+  evenAndOddHeaders: boolean;
+}
+
 export interface ParseContext {
   styles: StyleTable;
   numbering: Numbering;
+  settings: DocxSettings;
+  /** Theme colours and the document's bg/tx mapping, for DrawingML shapes. */
+  colors: ColorContext;
+  /**
+   * A footnote or endnote by id: its display number (assigned in reference
+   * order, as Word numbers them) and its parsed content. Undefined for a
+   * missing note.
+   */
+  note?(kind: 'footnote' | 'endnote', id: string): { number: string; blocks: DocxBlock[] } | undefined;
+  /** Inside a note's own content: the number its <w:footnoteRef/> repeats. */
+  readonly noteNumber?: string;
+  /** A comment by id, parsed from comments.xml. */
+  comment?(id: string): DocxComment | undefined;
+  /**
+   * Comments whose range is open at this point of the walk. Ranges cross
+   * paragraph boundaries, so this lives on the context, shared by the walk.
+   */
+  openComments?: Set<string>;
   /** The part these relationships resolve against (document / header / footer). */
   readonly partPath: string;
   /**
@@ -50,6 +82,8 @@ export interface ParseContext {
    * against the header/footer part, not word/document.xml.
    */
   rel(relId: string | undefined): Relationship | undefined;
+  /** Every relationship of a type from {@link partPath}. */
+  relsByType(type: string): Relationship[];
   /** Parsed XML of a package part by path (for header/footer parts). */
   getPartXml(part: string): XmlNode | undefined;
   /** A context whose relationships resolve against a different part. */
