@@ -17,6 +17,7 @@ import { parseEffectLst } from '../effects/effects.js';
 import { parseCustomGeometry } from './geometry/custom.js';
 import { TextStyleChain } from '../text/textStyles.js';
 import { type PhInfo, masterStyleKey, lstStyleOf } from './placeholders.js';
+import { parseAdjust } from '../../oxml/drawingml/geometry/presets.js';
 import type { ParseScope } from '../scope.js';
 
 export interface SlideScopes {
@@ -138,19 +139,6 @@ export function resolveGeometry(
   const cust = child(spPr, 'custGeom') ?? child(layoutSpPr, 'custGeom') ?? child(masterSpPr, 'custGeom');
   if (cust) return { type: 'custom', paths: parseCustomGeometry(cust) };
   return { type: 'preset', preset: 'rect', adjust: {} };
-}
-
-function parseAdjust(avLst: XmlNode | undefined): Record<string, number> {
-  const adj: Record<string, number> = {};
-  for (const gd of children(avLst, 'gd')) {
-    const name = attr(gd, 'name');
-    const fmla = attr(gd, 'fmla');
-    if (name && fmla?.startsWith('val ')) {
-      const n = Number(fmla.slice(4));
-      if (!Number.isNaN(n)) adj[name] = n / 100000;
-    }
-  }
-  return adj;
 }
 
 /** Resolve the solid color implied by a style reference (fillRef/lnRef/fontRef). */

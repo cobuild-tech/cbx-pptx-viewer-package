@@ -7,7 +7,10 @@
  * reported via `onChange` as the user scrolls.
  */
 import type { DocxDocument } from '../document/document.js';
-import { renderPage } from '../render/dom.js';
+import { renderPage, layoutTabs, renderCommentRail, layoutComments, COMMENT_RAIL_PX, type RevisionView } from '../render/dom.js';
+import { installFallbackFonts, fontStack } from '../../oxml/fontMetrics.js';
+import { installWebFontFamilies, type FontInstallation, type WebFontOptions } from '../../oxml/webfonts.js';
+import { collectDocxFonts } from './fonts.js';
 import { paginate } from './paginate.js';
 import { DocxEditContext } from '../edit/context.js';
 import { DocxEditSession } from '../edit/session.js';
@@ -48,6 +51,22 @@ export interface DocxViewerOptions {
   onSelectionChange?: (format: RunFormat) => void;
   /** How editable paragraphs are outlined. Ignored unless `editable`. */
   textBoxOutline?: TextBoxOutline;
+  /**
+   * Fetch fonts the document uses but the machine lacks from Google Fonts —
+   * metric-compatible clones for Office fonts (Carlito for Calibri…) — and
+   * re-paginate once they arrive. Default true; `false` keeps everything local
+   * (a size-adjusted system font still stands in, so pages break in the same
+   * places). An object customises the source.
+   */
+  webFonts?: boolean | WebFontOptions;
+  /**
+   * How tracked changes show: 'markup' (default) — insertions underlined and
+   * deletions struck through in each reviewer's colour, with change bars;
+   * 'final' — as if every change were accepted; 'original' — as if rejected.
+   */
+  trackChanges?: RevisionView;
+  /** Show comments: highlighted ranges and cards beside the page. Default true. */
+  comments?: boolean;
 }
 
 const PAGE_GAP = 16;
@@ -79,6 +98,13 @@ export class DocxViewer {
   private resizeObserver: ResizeObserver | null = null;
   private keyHandler: ((e: KeyboardEvent) => void) | null = null;
   private scrollHandler: (() => void) | null = null;
+  private fonts: FontInstallation;
+  private readonly revisions: RevisionView;
+  private readonly showComments: boolean;
+  /** Width the comment rail adds beside pages that have comments (0 when none do). */
+  private railW = 0;
+  private disposeFallbackFonts: (() => void) | null = null;
+  private destroyed = false;
 
   constructor(doc: DocxDocument, container: HTMLElement, options: DocxViewerOptions = {}) {
     this.doc = doc;
@@ -89,6 +115,8 @@ export class DocxViewer {
     if (options.onEdit) this.onEdit = options.onEdit;
     if (options.onSelectionChange) this.onSelectionChange = options.onSelectionChange;
     this.editable = options.editable ?? false;
+    this.revisions = options.trackChanges ?? 'markup';
+    this.showComments = options.comments ?? true;
     if (this.editable) {
       this.editCtx = new DocxEditContext(doc);
       this.session = new DocxEditSession(doc, { onChange: () => this.onEdit?.() });
@@ -112,6 +140,26 @@ export class DocxViewer {
     this.pagesEl.style.transformOrigin = 'top left';
     this.holder.appendChild(this.pagesEl);
     container.appendChild(this.holder);
+
+    // Metric-matched stand-ins for fonts the machine lacks, before anything is
+    // measured, so the first pagination already breaks where Word does.
+    this.disposeFallbackFonts = installFallbackFonts(container.ownerDocument);
+    const families = collectDocxFonts(doc.sections);
+    this.fonts =
+      options.webFonts === false
+        ? { ready: Promise.resolve(), dispose() {} }
+        : installWebFontFamilies(families, typeof options.webFonts === 'object' ? options.webFonts : {});
+    // Local stand-in faces load asynchronously on first use, too.
+    const fontDoc = container.ownerDocument;
+    const localLoads =
+      typeof fontDoc.fonts?.load === 'function'
+        ? Promise.all(
+            [...families].flatMap((f) =>
+              ['', 'bold '].map((w) => fontDoc.fonts.load(`${w}16px ${fontStack(f)}`).catch(() => [])),
+            ),
+          )
+        : Promise.resolve();
+    Promise.all([this.fonts.ready, localLoads]).then(() => this.refreshAfterFonts());
 
     this.pageModels = [];
     this.renderContent();
@@ -177,7 +225,7 @@ export class DocxViewer {
 
   /** Scale the page stack and size the holder box so scrollbars/centering match. */
   private applyScale(): void {
-    const maxPageW = this.pages.reduce((m, p) => Math.max(m, p.size.wPx), 1);
+    const maxPageW = this.pages.reduce((m, p) => Math.max(m, p.size.wPx), 1) + this.railW;
     // clientWidth already excludes the vertical scrollbar, so filling it exactly
     // leaves no horizontal scrollbar and no side gutter around the page.
     const avail = this.container.clientWidth || maxPageW;
@@ -265,6 +313,8 @@ export class DocxViewer {
   private renderContent(): void {
     const deps = {
       imageUrl: (p: string) => this.doc.imageUrl(p),
+      revisions: this.revisions,
+      comments: this.showComments,
       ...(this.editCtx ? { edit: this.editCtx } : {}),
     };
     this.editCtx?.reset();
@@ -275,6 +325,7 @@ export class DocxViewer {
     if (this.editable) {
       this.flowEl = renderFlow(this.doc.sections, deps);
       this.pagesEl.appendChild(this.flowEl);
+      layoutTabs(this.flowEl);
       // Pages are meaningless in flow mode; keep one entry so counts stay sane.
       this.pageModels = this.pageModels.length ? this.pageModels : [];
       return;
@@ -282,11 +333,41 @@ export class DocxViewer {
 
     // Flow sections into fixed-size pages (needs the DOM for measurement).
     this.pageModels = paginate(this.doc.sections, deps);
+    this.railW = 0;
     for (const page of this.pageModels) {
-      const el = renderPage(page, deps);
+      const sheet = renderPage(page, deps);
+      // A page with comments carries their cards in a rail beside it, as
+      // Word's markup pane does.
+      const rail = this.showComments ? renderCommentRail(page, deps) : undefined;
+      let el: HTMLElement = sheet;
+      if (rail) {
+        el = document.createElement('div');
+        el.style.display = 'flex';
+        el.style.alignItems = 'flex-start';
+        sheet.style.margin = '0';
+        el.append(sheet, rail);
+        this.railW = COMMENT_RAIL_PX + 12;
+      }
       this.pageEls.push(el);
       this.pagesEl.appendChild(el);
+      layoutTabs(el);
+      if (rail) layoutComments(el);
     }
+  }
+
+  /**
+   * Fonts arrived: text now measures differently, so pages may break in other
+   * places. Re-paginate, keeping the reader on the page they were on — unless
+   * they are typing, when a re-render would throw away the caret.
+   */
+  private refreshAfterFonts(): void {
+    if (this.destroyed) return;
+    if (this.editable && this.paragraphElOf(this.container.ownerDocument.activeElement)) return;
+    const page = this.index;
+    this.renderContent();
+    this.applyScale();
+    if (!this.editable && page > 0) this.goTo(page);
+    else this.onChange?.(this.index, this.count);
   }
 
   /** The editable paragraph element an event target sits inside, if any. */
@@ -433,6 +514,9 @@ export class DocxViewer {
   }
 
   destroy(): void {
+    this.destroyed = true;
+    this.fonts.dispose();
+    this.disposeFallbackFonts?.();
     this.resizeObserver?.disconnect();
     if (this.keyHandler) this.container.removeEventListener('keydown', this.keyHandler);
     if (this.scrollHandler) this.container.removeEventListener('scroll', this.scrollHandler);

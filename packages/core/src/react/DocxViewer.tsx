@@ -1,5 +1,6 @@
 import { useEffect, useImperativeHandle, useRef, useState, forwardRef } from 'react';
 import type { CSSProperties } from 'react';
+import type { WebFontOptions } from '../oxml/webfonts.js';
 import {
   DocxViewer as DocxViewerController,
   type DocxDocument,
@@ -46,6 +47,16 @@ export interface DocxViewerProps {
   editorToolbar?: boolean;
   /** Called after each committed edit, undo or redo. */
   onEdit?: () => void;
+  /**
+   * Fetch fonts the document uses but the machine lacks (metric-compatible
+   * clones for Office fonts) from Google Fonts. Default true; `false` keeps
+   * everything local. Read once, when the document loads.
+   */
+  webFonts?: boolean | WebFontOptions;
+  /** How tracked changes show: 'markup' (default), 'final' or 'original'. */
+  trackChanges?: 'markup' | 'final' | 'original';
+  /** Show comments beside the page. Default true. */
+  comments?: boolean;
 }
 
 export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function DocxViewer(
@@ -60,6 +71,9 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
     editable = false,
     editorToolbar = true,
     onEdit,
+    webFonts,
+    trackChanges,
+    comments,
   },
   ref,
 ) {
@@ -82,6 +96,9 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
     onLoad?.(doc);
     const viewer = new DocxViewerController(doc, stageRef.current, {
       editable,
+      ...(webFonts !== undefined ? { webFonts } : {}),
+      ...(trackChanges !== undefined ? { trackChanges } : {}),
+      ...(comments !== undefined ? { comments } : {}),
       onChange: (i, c) => {
         setIndex(i);
         setCount(c);
@@ -103,7 +120,7 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
       viewer.destroy();
       viewerRef.current = null;
     };
-  }, [doc, editable]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [doc, editable, trackChanges, comments]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useImperativeHandle(
     ref,

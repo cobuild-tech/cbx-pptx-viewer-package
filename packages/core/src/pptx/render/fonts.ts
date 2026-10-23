@@ -14,13 +14,9 @@
  * and fall back to the system/substitute font.
  */
 import type { Deck } from '../deck/deck.js';
+import type { FontInstallation } from '../../oxml/webfonts.js';
 
-export interface FontInstallation {
-  /** Resolves once all loadable embedded fonts are registered. */
-  ready: Promise<void>;
-  /** Remove the registered fonts from the document. */
-  dispose(): void;
-}
+export type { FontInstallation } from '../../oxml/webfonts.js';
 
 const NOOP: FontInstallation = { ready: Promise.resolve(), dispose() {} };
 

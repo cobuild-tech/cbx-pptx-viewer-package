@@ -16,6 +16,11 @@ export const EDIT_ATTR = {
    * from `fmt` because a run format splits runs and a paragraph format must not.
    */
   paraFmt: 'data-cbx-parafmt',
+  /**
+   * Marks a tab character drawn as a sized box (DOCX). The box is not text, so
+   * reconciliation reads it back as a tab rather than skipping it.
+   */
+  tab: 'data-cbx-tab',
   /** Marks a shape the user may select and move (PPTX). */
   shape: 'data-cbx-shape',
   /**

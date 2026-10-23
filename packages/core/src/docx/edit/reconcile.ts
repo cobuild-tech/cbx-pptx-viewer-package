@@ -17,7 +17,7 @@ import type { Resolver } from '../../oxml/edit/selection.js';
 import type { DocxParaEdit, DocxSegment } from './xmlWrite.js';
 
 /** The zero-width space the renderer uses to give empty paragraphs height. */
-const ZWSP = '​';
+const ZWSP = '\u200b';
 
 function isElement(n: Node): n is Element {
   return n.nodeType === 1;
@@ -74,6 +74,13 @@ function walk(
       continue;
     }
     if (!isElement(node)) continue;
+
+    // A tab is drawn as an empty sized box; it is content, so it comes back
+    // as a tab on the next segment.
+    if (node.hasAttribute(EDIT_ATTR.tab)) {
+      pending.tabBefore = true;
+      continue;
+    }
 
     // List markers and other generated decoration are marked uneditable and
     // carry no run key — they are not content and must not become runs.

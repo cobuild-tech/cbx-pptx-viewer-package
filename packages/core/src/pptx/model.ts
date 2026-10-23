@@ -156,13 +156,8 @@ export type Geometry =
   | { type: 'preset'; preset: string; adjust: Record<string, number> }
   | { type: 'custom'; paths: CustomPath[] };
 
-export interface CustomPath {
-  /** SVG path data in this path's own coordinate space. */
-  d: string;
-  /** Path coordinate-space width/height (from <a:path w= h=>), in EMU. */
-  w: number;
-  h: number;
-}
+export type { CustomPath } from '../oxml/drawingml/geometry/custom.js';
+import type { CustomPath } from '../oxml/drawingml/geometry/custom.js';
 
 interface ShapeBase {
   id?: string;
@@ -224,46 +219,8 @@ export interface FrameShape extends ShapeBase {
   chart?: Chart;
 }
 
-export type ChartKind = 'bar' | 'line' | 'pie' | 'doughnut' | 'area' | 'scatter';
-
-/** How multi-series plots stack/cluster (`<c:grouping>`). */
-export type ChartGrouping = 'clustered' | 'stacked' | 'percentStacked' | 'standard';
-
-export interface ChartSeries {
-  /** Series display name (legend / tooltip). */
-  name?: string;
-  /** Y values (bar height, line/area point, pie slice), ordered by category. */
-  values: number[];
-  /** Scatter/bubble X values, parallel to {@link values}. */
-  xValues?: number[];
-  /** Series-level fill color (bars/area/line), resolved against the theme. */
-  color?: Color;
-  /** Per-point colors (pie/doughnut slices, or individual bar `<c:dPt>`). */
-  pointColors?: (Color | undefined)[];
-}
-
-/**
- * A chart parsed from a `chartN.xml` part. Only the cached values
- * (`numCache`/`strCache`) are read — we render the snapshot, not the live
- * spreadsheet link. Lengths/positions are computed by the renderer in the
- * frame's pixel box.
- */
-export interface Chart {
-  kind: ChartKind;
-  /** Bar charts: true = horizontal bars (`barDir=bar`), false = columns (`col`). */
-  barHorizontal?: boolean;
-  grouping?: ChartGrouping;
-  /** Shared category-axis labels. */
-  categories: string[];
-  series: ChartSeries[];
-  title?: string;
-  /** Legend position, or omitted when there is no legend. */
-  legend?: 'r' | 'l' | 't' | 'b' | 'tr';
-  /** Doughnut hole radius as a fraction 0..1 of the outer radius. */
-  holeSize?: number;
-  /** Whether the chart shows numeric data labels on points. */
-  showValueLabels?: boolean;
-}
+export type { Chart, ChartKind, ChartGrouping, ChartSeries } from '../oxml/drawingml/chart/model.js';
+import type { Chart } from '../oxml/drawingml/chart/model.js';
 
 export type Shape =
   | PresetShape

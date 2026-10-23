@@ -9,7 +9,8 @@ import { child, children, attr, attrNum, localName, type XmlNode } from '../../o
 import { twipToPx } from '../units.js';
 import { logicalChildren, logicalChildrenNamed } from '../content.js';
 import { parseParagraph, borderToStroke, type TableBase } from '../paragraphs/paragraph.js';
-import type { DocxBlock, DocxTable, DocxTableCell } from '../model.js';
+import type { DocxBlock, DocxRowHeight, DocxTable, DocxTableCell } from '../model.js';
+import { applyContextualSpacing } from '../paragraphs/paragraph.js';
 import {
   parseTableLook,
   tableCellFormat,
@@ -33,7 +34,8 @@ export function parseTable(tbl: XmlNode, ctx: ParseContext): DocxTable {
   const insideH = readSide(directBorders, 'insideH') ?? style?.insideH;
   const insideV = readSide(directBorders, 'insideV') ?? style?.insideV;
 
-  const directCellMar = readCellMargins(child(tblPr, 'tblCellMar'));
+  // Cell margins: the style's, side by side overlaid by the table's own, with
+  // Word's built-in 0 / 0.08" as the floor.
   const styleCellMar = style?.cellMar
     ? {
         top: twipToPx(style.cellMar.top),
@@ -41,8 +43,8 @@ export function parseTable(tbl: XmlNode, ctx: ParseContext): DocxTable {
         bottom: twipToPx(style.cellMar.bottom),
         left: twipToPx(style.cellMar.left),
       }
-    : undefined;
-  const defaultCellMar = directCellMar ?? styleCellMar;
+    : WORD_CELL_MARGINS;
+  const defaultCellMar = { ...styleCellMar, ...readCellMargins(child(tblPr, 'tblCellMar')) };
 
   const trList = logicalChildrenNamed(tbl, 'tr');
   const rowCount = trList.length;
@@ -52,10 +54,29 @@ export function parseTable(tbl: XmlNode, ctx: ParseContext): DocxTable {
   /** colIndex -> the origin cell currently being vertically merged. */
   const vmergeOrigin = new Map<number, DocxTableCell>();
 
+  const rowHeights: (DocxRowHeight | undefined)[] = [];
+  const cantSplit: boolean[] = [];
+  let headerRows = 0;
+  let headerRun = true;
+
   for (let r = 0; r < trList.length; r++) {
     const tr = trList[r]!;
     const row: (DocxTableCell | null)[] = [];
+    const trPr = child(tr, 'trPr');
+    const trHeight = child(trPr, 'trHeight');
+    const hVal = attrNum(trHeight, 'val');
+    if (hVal) rowHeights[r] = { px: twipToPx(hVal), rule: attr(trHeight, 'hRule') === 'exact' ? 'exact' : 'atLeast' };
+    const rowCantSplit = child(trPr, 'cantSplit');
+    if (rowCantSplit ? flagOn(rowCantSplit) : style?.cantSplit) cantSplit[r] = true;
+    // Header rows are the unbroken run of <w:tblHeader> rows at the top.
+    if (headerRun && flagOn(child(trPr, 'tblHeader'))) headerRows++;
+    else headerRun = false;
+
+    // <w:gridBefore>: grid columns skipped before the row's first cell.
     let col = 0;
+    const gridBefore = attrNum(child(trPr, 'gridBefore'), 'val') ?? 0;
+    for (let i = 0; i < gridBefore; i++) row.push(EMPTY_CELL());
+    col += gridBefore;
     for (const tc of logicalChildrenNamed(tr, 'tc')) {
       const tcPr = child(tc, 'tcPr');
       const colSpan = attrNum(child(tcPr, 'gridSpan'), 'val') ?? 1;
@@ -84,29 +105,71 @@ export function parseTable(tbl: XmlNode, ctx: ParseContext): DocxTable {
 
       col += colSpan;
     }
+    // Pad a short row (<w:gridAfter>, or a malformed one) out to the grid.
+    while (col < colCount) {
+      row.push(EMPTY_CELL());
+      col++;
+    }
     rows.push(row);
   }
 
-  const widthPx = grid.reduce((a, b) => a + b, 0) || undefined;
-  const indentTwip = attrNum(child(tblPr, 'tblInd'), 'w');
-  const indentPx = indentTwip !== undefined ? twipToPx(indentTwip) : undefined;
-  return {
-    kind: 'table',
-    colWidths: grid,
-    rows,
-    ...(widthPx ? { widthPx } : {}),
-    ...(indentPx ? { indentPx } : {}),
-  };
+  const table: DocxTable = { kind: 'table', colWidths: grid, rows };
+  const gridW = grid.reduce((a, b) => a + b, 0);
+  if (gridW) table.widthPx = gridW;
+  // A percentage width (fiftieths of a percent) is resolved against the text
+  // column when the section is known — see fitTableWidth.
+  const tblW = child(tblPr, 'tblW');
+  if (attr(tblW, 'type') === 'pct') {
+    const raw = attr(tblW, 'w') ?? '';
+    const pct = raw.endsWith('%') ? parseFloat(raw) : (Number(raw) || 0) / 50;
+    if (pct > 0) table.widthPct = pct;
+  }
+
+  const jc = attr(child(tblPr, 'jc'), 'val');
+  if (jc === 'center') table.align = 'center';
+  else if (jc === 'right' || jc === 'end') table.align = 'right';
+
+  let indentPx = twipToPx(attrNum(child(tblPr, 'tblInd'), 'w') ?? 0);
+  // Before Word 2013 the table's left *border* sat one cell margin left of the
+  // indent, so the first cell's text — not its border — lined up with the margin.
+  if (ctx.settings.compatMode < 15 && table.align === undefined) indentPx -= defaultCellMar.left;
+  if (indentPx) table.indentPx = indentPx;
+
+  if (rowHeights.length) table.rowHeights = rowHeights;
+  if (cantSplit.length) table.cantSplit = cantSplit;
+  if (headerRows > 0 && headerRows < rows.length) table.headerRows = headerRows;
+  return table;
+}
+
+/** Word's built-in cell margins (the "Normal Table" style): 0 top/bottom, 0.08" sides. */
+const WORD_CELL_MARGINS = { top: 0, right: twipToPx(108), bottom: 0, left: twipToPx(108) };
+
+const EMPTY_CELL = (): DocxTableCell => ({ content: [], rowSpan: 1, colSpan: 1, empty: true });
+
+function flagOn(el: XmlNode | undefined): boolean {
+  if (!el) return false;
+  const v = attr(el, 'val');
+  return v === undefined || (v !== '0' && v !== 'false' && v !== 'off');
 }
 
 /**
- * Scale a table (and its column widths) down so it fits the available width,
- * reproducing Word's autofit. A negative tblInd lets the table extend left into
- * the margin, adding to the width it may occupy. Narrower tables are untouched.
+ * Size a table against its section. A percentage width is resolved against
+ * the text column. A table stated wider than the column is *not* shrunk —
+ * Word lets it run into the right margin — only one that would run off the
+ * page edge itself is scaled down to end there.
  */
-export function fitTableWidth(table: DocxTable, contentW: number): void {
+export function fitTableWidth(table: DocxTable, contentW: number, pageRoomW: number = contentW): void {
+  // A percentage-width table is sized to its share of the column first.
+  if (table.widthPct !== undefined) {
+    const target = (contentW * table.widthPct) / 100;
+    const natural = table.colWidths.reduce((a, b) => a + b, 0);
+    if (natural > 0 && target > 0) {
+      table.colWidths = table.colWidths.map((w) => (w * target) / natural);
+      table.widthPx = target;
+    }
+  }
   const indent = table.indentPx ?? 0;
-  const avail = contentW - indent; // negative indent widens the available space
+  const avail = pageRoomW - indent; // negative indent widens the available space
   const natural = table.colWidths.reduce((a, b) => a + b, 0);
   if (natural <= 0 || avail <= 0 || natural <= avail) return;
 
@@ -144,7 +207,7 @@ function buildCell(
   tc: XmlNode,
   tcPr: XmlNode | undefined,
   colSpan: number,
-  defaultCellMar: DocxTableCell['cellPaddingPx'],
+  defaultCellMar: NonNullable<DocxTableCell['cellPaddingPx']>,
   ctx: ParseContext,
   cond: TableCond | undefined,
   edge: RawBorders,
@@ -156,6 +219,7 @@ function buildCell(
     if (name === 'p') content.push(...parseParagraph(node, ctx, tableBase));
     else if (name === 'tbl') content.push(parseTable(node, ctx));
   }
+  applyContextualSpacing(content);
 
   const cell: DocxTableCell = { content, rowSpan: 1, colSpan };
 
@@ -174,8 +238,8 @@ function buildCell(
   if (vAlign === 'center' || vAlign === 'bottom' || vAlign === 'top') cell.vAlign = vAlign;
   else if (cond?.tc.vAlign) cell.vAlign = cond.tc.vAlign;
 
-  const cellMar = readCellMargins(child(tcPr, 'tcMar')) ?? defaultCellMar;
-  if (cellMar) cell.cellPaddingPx = cellMar;
+  const cellMar = { ...defaultCellMar, ...readCellMargins(child(tcPr, 'tcMar')) };
+  cell.cellPaddingPx = cellMar;
 
   return cell;
 }
@@ -200,13 +264,28 @@ function toStrokes(b: RawBorders): DocxTableCell['borders'] {
   return any ? out : undefined;
 }
 
-function readCellMargins(mar: XmlNode | undefined): DocxTableCell['cellPaddingPx'] {
-  if (!mar) return undefined;
-  const side = (name: string) => {
-    const w = attrNum(child(mar, name), 'w');
-    return w !== undefined ? twipToPx(w) : 0;
+/** The sides a margins element states (start/end are the bidi-neutral left/right). */
+function readCellMargins(mar: XmlNode | undefined): Partial<NonNullable<DocxTableCell['cellPaddingPx']>> {
+  const out: Partial<NonNullable<DocxTableCell['cellPaddingPx']>> = {};
+  if (!mar) return out;
+  const side = (...names: string[]) => {
+    for (const name of names) {
+      const el = child(mar, name);
+      // Only dxa (twips) is meaningful here; a missing type means dxa.
+      const w = attrNum(el, 'w');
+      if (el && w !== undefined && (attr(el, 'type') ?? 'dxa') === 'dxa') return twipToPx(w);
+    }
+    return undefined;
   };
-  return { top: side('top'), right: side('right'), bottom: side('bottom'), left: side('left') };
+  const top = side('top');
+  const right = side('right', 'end');
+  const bottom = side('bottom');
+  const left = side('left', 'start');
+  if (top !== undefined) out.top = top;
+  if (right !== undefined) out.right = right;
+  if (bottom !== undefined) out.bottom = bottom;
+  if (left !== undefined) out.left = left;
+  return out;
 }
 
 /** Read one named border side (top/left/insideH/…) into a RawBorder. */

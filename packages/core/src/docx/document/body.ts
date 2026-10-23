@@ -9,7 +9,7 @@
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { twipToPx } from '../units.js';
 import { logicalChildren } from '../content.js';
-import { parseParagraph } from '../paragraphs/paragraph.js';
+import { parseParagraph, applyContextualSpacing } from '../paragraphs/paragraph.js';
 import { parseTable, fitTableWidth } from '../tables/table.js';
 import { fitImageWidth } from '../images/image.js';
 import type { DocxBlock, DocxSection, DocxPageSize, DocxPageMargins } from '../model.js';
@@ -29,29 +29,61 @@ const DEFAULT_MARGINS: DocxPageMargins = {
 export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
   const sections: DocxSection[] = [];
   let current: DocxBlock[] = [];
+  let inherited: HeaderFooter = {};
+  /** Empty paragraphs whose only content is a section break. */
+  const breakMarks = new WeakSet<DocxBlock>();
 
   const flush = (sectPr: XmlNode | undefined) => {
-    const { size, margins, titlePg } = readSectPr(sectPr);
-    const hf = readHeaderFooter(sectPr, ctx);
-    // Autofit top-level tables to the section's content width so oversized/pct
-    // tables don't overflow the right margin (Word scales them to fit).
+    const { size, margins, titlePg, extra } = readSectPr(sectPr);
+    // A section that does not reference a header/footer of some type carries
+    // on with the previous section's.
+    const own = readHeaderFooter(sectPr, ctx);
+    const hf: HeaderFooter = {};
+    for (const key of HF_KEYS) {
+      const blocks = key in own ? own[key] : inherited[key];
+      if (blocks) hf[key] = blocks;
+    }
+    inherited = hf;
+    const shown: HeaderFooter = {};
+    for (const key of HF_KEYS) if (hf[key]?.length) shown[key] = hf[key];
+    applyContextualSpacing(current);
+    // Size top-level tables against the section: percentage widths resolve
+    // against the column, and only a table running off the page is shrunk.
     const contentW = size.wPx - margins.leftPx - margins.rightPx;
     for (const block of current) {
-      if (block.kind === 'table') fitTableWidth(block, contentW);
+      if (block.kind === 'table') fitTableWidth(block, contentW, size.wPx - margins.leftPx);
       else if (block.kind === 'image') fitImageWidth(block, contentW);
     }
-    sections.push({ index: sections.length, size, margins, blocks: current, ...(titlePg ? { titlePg } : {}), ...hf });
+    sections.push({
+      index: sections.length,
+      size,
+      margins,
+      blocks: current,
+      ...(titlePg ? { titlePg } : {}),
+      ...(ctx.settings.evenAndOddHeaders ? { evenAndOddHeaders: true } : {}),
+      ...extra,
+      ...shown,
+    });
     current = [];
   };
 
   for (const node of logicalChildren(body)) {
     const name = localName(node.name);
     if (name === 'p') {
-      current.push(...parseParagraph(node, ctx));
+      const parsed = parseParagraph(node, ctx);
+      current.push(...parsed);
       const sectPr = child(child(node, 'pPr'), 'sectPr');
-      if (sectPr) flush(sectPr);
+      if (sectPr) {
+        const mark = parsed[parsed.length - 1];
+        if (mark?.kind === 'paragraph' && !mark.runs.some((r) => r.text || r.drawing || r.math)) breakMarks.add(mark);
+        flush(sectPr);
+      }
     } else if (name === 'tbl') {
       current.push(parseTable(node, ctx));
+    } else if (name === 'commentRangeStart') {
+      ctx.openComments?.add(attr(node, 'id') ?? '');
+    } else if (name === 'commentRangeEnd') {
+      ctx.openComments?.delete(attr(node, 'id') ?? '');
     } else if (name === 'sectPr') {
       // Final section's properties (direct body child).
       flush(node);
@@ -60,6 +92,16 @@ export function parseBody(body: XmlNode, ctx: ParseContext): DocxSection[] {
 
   // Body ended without a trailing sectPr child (unusual) — emit what's left.
   if (current.length > 0 || sections.length === 0) flush(undefined);
+
+  // An empty paragraph that only carries a section break takes no room when
+  // the next section continues on the same page: Word lays the two sections
+  // out back to back.
+  for (let i = 1; i < sections.length; i++) {
+    if (sections[i]!.start !== 'continuous') continue;
+    const prev = sections[i - 1]!.blocks;
+    const last = prev[prev.length - 1];
+    if (last && breakMarks.has(last)) prev.pop();
+  }
 
   return sections;
 }
@@ -73,29 +115,35 @@ export function parseBlocks(container: XmlNode | undefined, ctx: ParseContext): 
     if (name === 'p') out.push(...parseParagraph(node, ctx));
     else if (name === 'tbl') out.push(parseTable(node, ctx));
   }
+  applyContextualSpacing(out);
   return out;
 }
 
-function readHeaderFooter(
-  sectPr: XmlNode | undefined,
-  ctx: ParseContext,
-): { header?: DocxBlock[]; footer?: DocxBlock[]; firstHeader?: DocxBlock[]; firstFooter?: DocxBlock[] } {
-  if (!sectPr) return {};
-  const out: { header?: DocxBlock[]; footer?: DocxBlock[]; firstHeader?: DocxBlock[]; firstFooter?: DocxBlock[] } = {};
+type HeaderFooter = Partial<
+  Record<'header' | 'footer' | 'firstHeader' | 'firstFooter' | 'evenHeader' | 'evenFooter', DocxBlock[]>
+>;
+const HF_KEYS = ['header', 'footer', 'firstHeader', 'firstFooter', 'evenHeader', 'evenFooter'] as const;
 
+/**
+ * The header/footer parts a sectPr references. A key is present when the
+ * section has a reference of that type — even one resolving to nothing — and
+ * absent when it has none, which is what inheritance keys off.
+ */
+function readHeaderFooter(sectPr: XmlNode | undefined, ctx: ParseContext): HeaderFooter {
+  if (!sectPr) return {};
+  const out: HeaderFooter = {};
   const hdrs = children(sectPr, 'headerReference');
   const ftrs = children(sectPr, 'footerReference');
-
-  const header = resolveRef(hdrs, 'default', 'hdr', ctx);
-  if (header?.length) out.header = header;
-  const firstHeader = resolveRef(hdrs, 'first', 'hdr', ctx);
-  if (firstHeader?.length) out.firstHeader = firstHeader;
-
-  const footer = resolveRef(ftrs, 'default', 'ftr', ctx);
-  if (footer?.length) out.footer = footer;
-  const firstFooter = resolveRef(ftrs, 'first', 'ftr', ctx);
-  if (firstFooter?.length) out.firstFooter = firstFooter;
-
+  const set = (key: keyof HeaderFooter, refs: XmlNode[], type: 'default' | 'first' | 'even', root: string) => {
+    const blocks = resolveRef(refs, type, root, ctx);
+    if (blocks) out[key] = blocks;
+  };
+  set('header', hdrs, 'default', 'hdr');
+  set('firstHeader', hdrs, 'first', 'hdr');
+  set('footer', ftrs, 'default', 'ftr');
+  set('firstFooter', ftrs, 'first', 'ftr');
+  set('evenHeader', hdrs, 'even', 'hdr');
+  set('evenFooter', ftrs, 'even', 'ftr');
   return out;
 }
 
@@ -114,9 +162,9 @@ function resolveRef(
   const pick = refs.find((r) => (attr(r, 'type') ?? 'default') === type);
   if (!pick) return undefined;
   const rel = ctx.rel(attr(pick, 'id'));
-  if (!rel) return undefined;
+  if (!rel) return [];
   const xml = ctx.getPartXml(rel.target);
-  if (!xml) return undefined;
+  if (!xml) return [];
   // Header/footer parts have their own rels — resolve their images/hyperlinks
   // against the header/footer part, not word/document.xml.
   const partCtx = ctx.forPart(rel.target);
@@ -124,12 +172,26 @@ function resolveRef(
   return parseBlocks(container, partCtx);
 }
 
+type SectionExtra = Pick<DocxSection, 'start' | 'pageNumberStart' | 'pageNumberFormat' | 'columns'>;
+
 function readSectPr(sectPr: XmlNode | undefined): {
   size: DocxPageSize;
   margins: DocxPageMargins;
   titlePg: boolean;
+  extra: SectionExtra;
 } {
-  if (!sectPr) return { size: { ...DEFAULT_PAGE }, margins: { ...DEFAULT_MARGINS }, titlePg: false };
+  if (!sectPr) return { size: { ...DEFAULT_PAGE }, margins: { ...DEFAULT_MARGINS }, titlePg: false, extra: {} };
+
+  const extra: SectionExtra = {};
+  const type = attr(child(sectPr, 'type'), 'val');
+  if (type === 'continuous' || type === 'evenPage' || type === 'oddPage' || type === 'nextColumn' || type === 'nextPage') {
+    extra.start = type;
+  }
+  const pgNumType = child(sectPr, 'pgNumType');
+  const numStart = attrNum(pgNumType, 'start');
+  if (numStart !== undefined) extra.pageNumberStart = numStart;
+  const numFmt = attr(pgNumType, 'fmt');
+  if (numFmt) extra.pageNumberFormat = numFmt;
 
   const pgSz = child(sectPr, 'pgSz');
   let w = attrNum(pgSz, 'w') ?? 12240;
@@ -149,6 +211,35 @@ function readSectPr(sectPr: XmlNode | undefined): {
       headerPx: twipToPx(mar('header', 720)),
       footerPx: twipToPx(mar('footer', 720)),
     },
-    titlePg: child(sectPr, 'titlePg') !== undefined,
+    titlePg: child(sectPr, 'titlePg') !== undefined && attr(child(sectPr, 'titlePg'), 'val') !== '0',
+    extra: { ...extra, ...readColumns(child(sectPr, 'cols'), twipToPx(w) - twipToPx(mar('left', 1440)) - twipToPx(mar('right', 1440))) },
   };
+}
+
+/**
+ * <w:cols>: equal columns (num, space) or explicit ones (<w:col w:w w:space>),
+ * laid out left to right across the text area.
+ */
+function readColumns(cols: XmlNode | undefined, textW: number): Pick<DocxSection, 'columns'> {
+  if (!cols) return {};
+  const sep = attr(cols, 'sep');
+  const separator = sep !== undefined && sep !== '0' && sep !== 'false';
+  const explicit = children(cols, 'col');
+  const equal = attr(cols, 'equalWidth');
+  const out: { xPx: number; widthPx: number }[] = [];
+  if (explicit.length > 1 && equal !== '1' && equal !== 'true') {
+    let x = 0;
+    for (const c of explicit) {
+      const w = twipToPx(attrNum(c, 'w') ?? 0);
+      out.push({ xPx: x, widthPx: w });
+      x += w + twipToPx(attrNum(c, 'space') ?? 0);
+    }
+  } else {
+    const n = attrNum(cols, 'num') ?? 1;
+    if (n <= 1) return {};
+    const space = twipToPx(attrNum(cols, 'space') ?? 720);
+    const w = (textW - space * (n - 1)) / n;
+    for (let i = 0; i < n; i++) out.push({ xPx: i * (w + space), widthPx: w });
+  }
+  return out.length > 1 ? { columns: { cols: out, separator } } : {};
 }

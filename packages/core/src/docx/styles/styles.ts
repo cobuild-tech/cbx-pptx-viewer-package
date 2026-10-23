@@ -9,6 +9,18 @@
  */
 import { child, children, attr, attrNum, type XmlNode } from '../../oxml/xml.js';
 
+/** Latin typefaces of the document theme's font scheme. */
+export interface ThemeFonts {
+  major?: string;
+  minor?: string;
+  /** East Asian typefaces (the scheme's <a:ea>, or its script font for the document's language). */
+  majorEa?: string;
+  minorEa?: string;
+  /** Complex-script typefaces (<a:cs>). */
+  majorCs?: string;
+  minorCs?: string;
+}
+
 /** Character-level formatting, in raw Word units where noted. */
 export interface RunProps {
   bold?: boolean;
@@ -24,6 +36,29 @@ export interface RunProps {
   font?: string;
   vertAlign?: 'super' | 'sub';
   caps?: 'all' | 'small';
+  /** <w:rFonts w:eastAsia> (or its theme token): the face for East Asian characters. */
+  eastAsiaFont?: string;
+  /** <w:rFonts w:cs>: the face for complex-script (e.g. Arabic, Hebrew) runs. */
+  csFont?: string;
+  /** <w:szCs>: complex-script size, half-points. */
+  csSizeHalfPt?: number;
+  csBold?: boolean;
+  csItalic?: boolean;
+  /** <w:rtl>: the run is right-to-left complex-script text. */
+  rtl?: boolean;
+  /** <w:vanish>: hidden text. */
+  hidden?: boolean;
+  /** <w:spacing w:val>: extra space between characters, in twips (may be negative). */
+  charSpacingTwip?: number;
+  /** <w:kern w:val>: kern text at or above this size, in half-points. */
+  kernHalfPt?: number;
+}
+
+/** One <w:tab> in a <w:tabs> list. `clear` removes an inherited stop at the same position. */
+export interface RawTab {
+  posTwip: number;
+  val: string;
+  leader?: string;
 }
 
 /** Paragraph-level formatting, twips where noted. */
@@ -42,8 +77,14 @@ export interface ParaProps {
   line?: number;
   lineRule?: 'auto' | 'exact' | 'atLeast';
   contextualSpacing?: boolean;
-  keepTogether?: boolean;
+  keepNext?: boolean;
+  keepLines?: boolean;
+  widowControl?: boolean;
   pageBreakBefore?: boolean;
+  /** Tab stops, already merged down the cascade (clears applied). */
+  tabs?: RawTab[];
+  /** <w:bidi>: a right-to-left paragraph. */
+  bidi?: boolean;
   shadingHex?: string;
   numId?: number;
   ilvl?: number;
@@ -55,6 +96,8 @@ export interface RawBorder {
   sz?: number;
   colorHex?: string;
   val?: string;
+  /** <w:space>: distance from the text, in points. */
+  spacePt?: number;
 }
 export type RawBorders = Partial<Record<'top' | 'bottom' | 'left' | 'right', RawBorder>>;
 
@@ -82,6 +125,8 @@ export interface ResolvedTableStyle {
   cellMar?: { top: number; right: number; bottom: number; left: number };
   rowBandSize: number;
   colBandSize: number;
+  /** Rows may not break across pages (<w:trPr><w:cantSplit> in the style). */
+  cantSplit?: boolean;
   /** Whole-table defaults. */
   whole: TableCond;
   /** Conditional formats keyed by <w:tblStylePr w:type> (firstRow, band1Horz, …). */
@@ -106,6 +151,7 @@ interface TableStylePart {
   cellMar?: { top: number; right: number; bottom: number; left: number };
   rowBandSize?: number;
   colBandSize?: number;
+  cantSplit?: boolean;
   tc: CellShade;
   cond: Map<string, TableCond>;
 }
@@ -143,12 +189,17 @@ export class StyleTable {
     this.defaultCharId = defaultCharId;
   }
 
-  static parse(stylesXml: XmlNode | undefined): StyleTable {
+  /**
+   * @param themeFonts the theme's latin major (headings) and minor (body)
+   *   typefaces, which `asciiTheme`/`hAnsiTheme` references resolve to.
+   */
+  static parse(stylesXml: XmlNode | undefined, themeFonts: ThemeFonts = {}): StyleTable {
     const byId = new Map<string, StyleDef>();
     let docRun: Partial<RunProps> = {};
     let docPara: Partial<ParaProps> = {};
     let defaultParaId: string | undefined;
     let defaultCharId: string | undefined;
+    let defaultTableId: string | undefined;
 
     if (stylesXml) {
       const dd = child(stylesXml, 'docDefaults');
@@ -173,10 +224,40 @@ export class StyleTable {
         if (attr(s, 'default') && bool(attr(s, 'default'))) {
           if (type === 'paragraph') defaultParaId = id;
           else if (type === 'character') defaultCharId = id;
+          else if (type === 'table') defaultTableId = id;
         }
       }
     }
-    return new StyleTable(byId, docRun, docPara, defaultParaId, defaultCharId);
+    // Word's own defaults when docDefaults is silent: Times New Roman, 10pt.
+    docRun = { font: 'Times New Roman', sizeHalfPt: 20, ...docRun };
+    const table = new StyleTable(byId, docRun, docPara, defaultParaId, defaultCharId);
+    table.themeFonts = themeFonts;
+    table.defaultTableId = defaultTableId;
+    return table;
+  }
+
+  private themeFonts: ThemeFonts = {};
+  private defaultTableId: string | undefined;
+
+  /** Resolve a theme-font token to the theme's typeface; literal names pass through. */
+  fontName(font: string | undefined): string | undefined {
+    const t = this.themeFonts;
+    switch (font) {
+      case MAJOR_FONT:
+        return t.major ?? t.minor;
+      case MINOR_FONT:
+        return t.minor ?? t.major;
+      case `${MAJOR_FONT}-ea`:
+        return t.majorEa ?? t.minorEa;
+      case `${MINOR_FONT}-ea`:
+        return t.minorEa ?? t.majorEa;
+      case `${MAJOR_FONT}-cs`:
+        return t.majorCs ?? t.minorCs;
+      case `${MINOR_FONT}-cs`:
+        return t.minorCs ?? t.majorCs;
+      default:
+        return font;
+    }
   }
 
   styleName(id: string | undefined): string {
@@ -218,6 +299,38 @@ export class StyleTable {
     return acc;
   }
 
+  /**
+   * A paragraph style's properties split in two layers: what comes from
+   * docDefaults and the default ("Normal") style, and what the style's own
+   * chain above that adds. A table style slots *between* the two: Word lets it
+   * override Normal (which is why a cell loses Normal's space-after) but not a
+   * style the paragraph names.
+   */
+  paraLayers(styleId: string | undefined): {
+    basePara: ParaProps;
+    ownPara: Partial<ParaProps>;
+    baseRun: RunProps;
+    ownRun: Partial<RunProps>;
+  } {
+    const chain = this.chain(styleId ?? this.defaultParaId);
+    // Normal is in the base only for styles that actually inherit from it.
+    const dflt = chain.find((st) => st.id === this.defaultParaId);
+    let basePara: ParaProps = { ...this.docDefaultPara };
+    let baseRun: RunProps = { ...this.docDefaultRun };
+    if (dflt) {
+      basePara = mergePara(basePara, dflt.pPr);
+      baseRun = mergeRun(baseRun, dflt.rPr);
+    }
+    let ownPara: ParaProps = {};
+    let ownRun: RunProps = {};
+    for (const st of chain) {
+      if (st === dflt) continue;
+      ownPara = mergePara(ownPara, st.pPr);
+      ownRun = mergeRun(ownRun, st.rPr);
+    }
+    return { basePara, ownPara, baseRun, ownRun };
+  }
+
   /** Run props from a character style chain (rStyle). */
   resolveCharStyle(styleId: string | undefined): RunProps {
     let acc: RunProps = {};
@@ -231,8 +344,11 @@ export class StyleTable {
    * whole-table defaults, and the conditional formats (firstRow, bands, …).
    */
   resolveTableStyle(styleId: string | undefined): ResolvedTableStyle | undefined {
-    if (!styleId) return undefined;
-    const chain = this.chain(styleId).filter((d) => d.tbl);
+    // A table naming no style gets the document's default table style ("Normal
+    // Table"), which is where Word's 0.08" left/right cell margins come from.
+    const id = styleId && this.byId.has(styleId) ? styleId : this.defaultTableId;
+    if (!id) return undefined;
+    const chain = this.chain(id).filter((d) => d.tbl);
     if (!chain.length) return undefined;
 
     const res: ResolvedTableStyle = {
@@ -253,6 +369,7 @@ export class StyleTable {
       if (t.cellMar) res.cellMar = t.cellMar;
       if (t.rowBandSize !== undefined) res.rowBandSize = t.rowBandSize;
       if (t.colBandSize !== undefined) res.colBandSize = t.colBandSize;
+      if (t.cantSplit !== undefined) res.cantSplit = t.cantSplit;
       for (const [type, cond] of t.cond) {
         const prev = res.cond.get(type);
         res.cond.set(type, prev ? mergeTableCond(prev, cond) : cond);
@@ -369,6 +486,9 @@ function readTablePart(s: XmlNode): TableStylePart {
     if (cb !== undefined) part.colBandSize = cb;
   }
 
+  const cantSplit = child(child(s, 'trPr'), 'cantSplit');
+  if (cantSplit) part.cantSplit = bool(attr(cantSplit, 'val'));
+
   for (const sp of children(s, 'tblStylePr')) {
     const type = attr(sp, 'type');
     if (!type) continue;
@@ -423,7 +543,22 @@ export function mergeRun(base: RunProps, over: Partial<RunProps>): RunProps {
 export function mergePara(base: ParaProps, over: Partial<ParaProps>): ParaProps {
   const out: ParaProps = { ...base, ...definedOnly(over) };
   if (over.borders) out.borders = { ...base.borders, ...over.borders };
+  if (over.tabs) out.tabs = mergeTabs(base.tabs, over.tabs);
   return out;
+}
+
+/**
+ * Tab stops accumulate down the cascade rather than replacing each other: a
+ * style's stops stay unless a later layer states `clear` at the same position.
+ */
+function mergeTabs(base: RawTab[] | undefined, over: RawTab[]): RawTab[] {
+  const byPos = new Map<number, RawTab>();
+  for (const t of base ?? []) byPos.set(t.posTwip, t);
+  for (const t of over) {
+    if (t.val === 'clear') byPos.delete(t.posTwip);
+    else byPos.set(t.posTwip, t);
+  }
+  return [...byPos.values()].sort((a, b) => a.posTwip - b.posTwip);
 }
 
 function definedOnly<T extends object>(o: T): Partial<T> {
@@ -452,8 +587,14 @@ export function rPrFrom(rPr: XmlNode | undefined): Partial<RunProps> {
   if (b) out.bold = bool(attr(b, 'val'));
   const i = child(rPr, 'i');
   if (i) out.italic = bool(attr(i, 'val'));
-  const strike = child(rPr, 'strike');
+  const strike = child(rPr, 'strike') ?? child(rPr, 'dstrike');
   if (strike) out.strike = bool(attr(strike, 'val'));
+  const vanish = child(rPr, 'vanish');
+  if (vanish) out.hidden = bool(attr(vanish, 'val'));
+  const charSpacing = attrNum(child(rPr, 'spacing'), 'val');
+  if (charSpacing !== undefined) out.charSpacingTwip = charSpacing;
+  const kern = attrNum(child(rPr, 'kern'), 'val');
+  if (kern !== undefined) out.kernHalfPt = kern;
   const u = child(rPr, 'u');
   if (u) out.underline = (attr(u, 'val') ?? 'single') !== 'none';
 
@@ -463,9 +604,27 @@ export function rPrFrom(rPr: XmlNode | undefined): Partial<RunProps> {
   const color = attr(child(rPr, 'color'), 'val');
   if (color && color !== 'auto') out.colorHex = normHex(color);
 
+  // A theme reference wins over a literal face in the same <w:rFonts> — Word
+  // writes both, and draws the theme's. Kept as a token until the style table
+  // resolves it against the document theme.
   const rFonts = child(rPr, 'rFonts');
-  const font = attr(rFonts, 'ascii') ?? attr(rFonts, 'hAnsi') ?? attr(rFonts, 'cs');
+  const theme = attr(rFonts, 'asciiTheme') ?? attr(rFonts, 'hAnsiTheme');
+  const font = theme ? themeToken(theme) : (attr(rFonts, 'ascii') ?? attr(rFonts, 'hAnsi'));
   if (font) out.font = font;
+  const eaTheme = attr(rFonts, 'eastAsiaTheme');
+  const ea = eaTheme ? themeToken(eaTheme) : attr(rFonts, 'eastAsia');
+  if (ea) out.eastAsiaFont = ea;
+  const csTheme = attr(rFonts, 'cstheme');
+  const cs = csTheme ? themeToken(csTheme) : attr(rFonts, 'cs');
+  if (cs) out.csFont = cs;
+  const szCs = attrNum(child(rPr, 'szCs'), 'val');
+  if (szCs !== undefined) out.csSizeHalfPt = szCs;
+  const bCs = child(rPr, 'bCs');
+  if (bCs) out.csBold = bool(attr(bCs, 'val'));
+  const iCs = child(rPr, 'iCs');
+  if (iCs) out.csItalic = bool(attr(iCs, 'val'));
+  const rtl = child(rPr, 'rtl');
+  if (rtl) out.rtl = bool(attr(rtl, 'val'));
 
   const hl = attr(child(rPr, 'highlight'), 'val');
   if (hl && hl !== 'none') out.highlightHex = namedHighlight(hl);
@@ -512,6 +671,9 @@ export function pPrFrom(pPr: XmlNode | undefined): Partial<ParaProps> {
     const line = attrNum(spacing, 'line');
     if (before !== undefined) out.spaceBeforeTwip = before;
     if (after !== undefined) out.spaceAfterTwip = after;
+    // HTML-style automatic spacing, which Word renders as 14pt.
+    if (bool(attr(spacing, 'beforeAutospacing') ?? 'false')) out.spaceBeforeTwip = 280;
+    if (bool(attr(spacing, 'afterAutospacing') ?? 'false')) out.spaceAfterTwip = 280;
     if (line !== undefined) {
       out.line = line;
       out.lineRule = (attr(spacing, 'lineRule') as ParaProps['lineRule']) ?? 'auto';
@@ -519,7 +681,28 @@ export function pPrFrom(pPr: XmlNode | undefined): Partial<ParaProps> {
   }
 
   if (child(pPr, 'contextualSpacing')) out.contextualSpacing = bool(attr(child(pPr, 'contextualSpacing'), 'val'));
-  if (child(pPr, 'keepNext') || child(pPr, 'keepLines')) out.keepTogether = true;
+  const flag = (name: string): boolean | undefined => {
+    const el = child(pPr, name);
+    return el ? bool(attr(el, 'val')) : undefined;
+  };
+  const keepNext = flag('keepNext');
+  if (keepNext !== undefined) out.keepNext = keepNext;
+  const keepLines = flag('keepLines');
+  if (keepLines !== undefined) out.keepLines = keepLines;
+  const widowControl = flag('widowControl');
+  if (widowControl !== undefined) out.widowControl = widowControl;
+
+  const tabs = child(pPr, 'tabs');
+  if (tabs) {
+    out.tabs = children(tabs, 'tab').flatMap((t) => {
+      const pos = attrNum(t, 'pos');
+      if (pos === undefined) return [];
+      const tab: RawTab = { posTwip: pos, val: attr(t, 'val') ?? 'left' };
+      const leader = attr(t, 'leader');
+      if (leader && leader !== 'none') tab.leader = leader;
+      return [tab];
+    });
+  }
   if (child(pPr, 'pageBreakBefore')) out.pageBreakBefore = bool(attr(child(pPr, 'pageBreakBefore'), 'val'));
 
   const shdFill = attr(child(pPr, 'shd'), 'fill');
@@ -533,17 +716,31 @@ export function pPrFrom(pPr: XmlNode | undefined): Partial<ParaProps> {
     out.ilvl = ilvl ?? 0;
   }
 
+  const bidi = child(pPr, 'bidi');
+  if (bidi) out.bidi = bool(attr(bidi, 'val'));
+
   const pBdr = child(pPr, 'pBdr');
   if (pBdr) {
     const b: RawBorders = {};
     for (const side of ['top', 'bottom', 'left', 'right'] as const) {
       const e = child(pBdr, side);
-      if (e) b[side] = { sz: attrNum(e, 'sz'), colorHex: hexOrUndef(attr(e, 'color')), val: attr(e, 'val') };
+      if (e) b[side] = { sz: attrNum(e, 'sz'), colorHex: hexOrUndef(attr(e, 'color')), val: attr(e, 'val'), spacePt: attrNum(e, 'space') };
     }
     out.borders = b;
   }
 
   return out;
+}
+
+/** Token standing in for a theme font until {@link StyleTable.fontName} resolves it. */
+const MAJOR_FONT = '+major';
+const MINOR_FONT = '+minor';
+
+function themeToken(theme: string): string {
+  const base = theme.startsWith('major') ? MAJOR_FONT : MINOR_FONT;
+  if (/EastAsia$/.test(theme)) return `${base}-ea`;
+  if (/Bidi$/.test(theme)) return `${base}-cs`;
+  return base;
 }
 
 function mapAlign(jc: string): ParaProps['align'] {
