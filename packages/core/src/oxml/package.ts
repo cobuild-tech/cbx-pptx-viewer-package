@@ -211,6 +211,32 @@ export class OpcPackage {
   }
 
   /**
+   * Add a relationship from a source part ('' for the package root) and return
+   * its new id. `target` is written as given (relative to the source part's
+   * folder, as Office writes it). Mutates the .rels part, creating it if needed.
+   */
+  addRelationship(partPath: string, type: string, target: string): string {
+    const norm = partPath === '' ? '' : normalizePath(partPath);
+    const relsPart = relsPathFor(norm);
+    let relsXml = this.getXml(relsPart);
+    if (!relsXml) {
+      this.setPart(
+        relsPart,
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>\n<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>',
+      );
+      relsXml = this.getXml(relsPart)!;
+    }
+    const used = new Set(children(relsXml, 'Relationship').map((r) => attr(r, 'Id')));
+    let n = used.size + 1;
+    while (used.has(`rId${n}`)) n++;
+    const id = `rId${n}`;
+    relsXml.children.push(createElement('Relationship', { Id: id, Type: type, Target: target }));
+    this.markDirty(relsPart);
+    this.relsCache.delete(norm);
+    return id;
+  }
+
+  /**
    * Set or (with `undefined`) remove a part's `[Content_Types].xml` override,
    * keeping the parsed table and the XML in step.
    */

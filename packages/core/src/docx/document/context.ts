@@ -22,6 +22,10 @@ export interface DocxSource {
   node: XmlNode;
   /** The `<w:r>` a `<w:t>` belongs to, for rPr cloning. */
   owner?: XmlNode;
+  /** The `<w:br>`/`<w:cr>` behind a run's {@link DocxRun.breakBefore}. */
+  br?: XmlNode;
+  /** The `<w:tab>`/`<w:ptab>` behind a run's {@link DocxRun.tabBefore}. */
+  tab?: XmlNode;
   /** Package part the node lives in (document, header or footer). */
   part: string;
 }
@@ -93,5 +97,5 @@ export interface ParseContext {
    * knows its own {@link partPath}, so headers/footers are distinguishable from
    * the main document — which is what makes them read-only in the editor.
    */
-  recordSource?(model: object, node: XmlNode, owner?: XmlNode): void;
+  recordSource?(model: object, node: XmlNode, owner?: XmlNode, pre?: { br?: XmlNode; tab?: XmlNode }): void;
 }

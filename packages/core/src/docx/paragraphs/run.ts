@@ -81,6 +81,9 @@ export function parseRunContainer(
 
 interface Pending {
   breakBefore: boolean;
+  /** The elements behind the pending break and tab, recorded for editing. */
+  brNode?: XmlNode;
+  tabNode?: XmlNode;
   pageBreakBefore: boolean;
   columnBreak?: boolean;
   tabBefore: boolean;
@@ -103,13 +106,22 @@ function parseRun(
   const rPrChange = child(child(r, 'rPr'), 'rPrChange');
   const pending: Pending = { breakBefore: false, pageBreakBefore: false, tabBefore: false };
 
-  const emit = (text: string, source?: XmlNode): DocxRun => {
+  /**
+   * `source` is the element the run's content came from — its <w:t> for text,
+   * or the drawing, reference or symbol it stands for — and identifies the
+   * run; the <w:r> carries its <w:rPr>. The editor maps every caret position
+   * through these, so even a run with no content records its <w:r>.
+   */
+  const emit = (text: string, source: XmlNode = r): DocxRun => {
     const run = makeRun(text, props, hyperlink, pending);
     const code = currentFieldCode(fieldState);
     if (code !== undefined) run.fieldCode = code;
     out.push(run);
-    // The <w:t> identifies the run; the <w:r> carries its <w:rPr>.
-    if (source) ctx.recordSource?.(run, source, r);
+    const pre = {
+      ...(pending.breakBefore && pending.brNode ? { br: pending.brNode } : {}),
+      ...(pending.tabBefore && pending.tabNode ? { tab: pending.tabNode } : {}),
+    };
+    ctx.recordSource?.(run, source, r, pre);
     if (rPrChange) {
       run.formatChange = { author: attr(rPrChange, 'author') ?? '' };
       const date = attr(rPrChange, 'date');
@@ -120,6 +132,8 @@ function parseRun(
     pending.tabBefore = false;
     delete pending.ptab;
     delete pending.columnBreak;
+    delete pending.brNode;
+    delete pending.tabNode;
     return run;
   };
 
@@ -146,19 +160,23 @@ function parseRun(
         // Both keep breakBefore, which is what editing round-trips.
         const type = attr(node, 'type');
         pending.breakBefore = true;
+        pending.brNode = node;
         if (type === 'page' || type === 'column') pending.pageBreakBefore = true;
         if (type === 'column') pending.columnBreak = true;
         break;
       }
       case 'cr':
         pending.breakBefore = true;
+        pending.brNode = node;
         break;
       case 'tab':
         pending.tabBefore = true;
+        pending.tabNode = node;
         break;
       case 'ptab': {
         const align = attr(node, 'alignment');
         pending.tabBefore = true;
+        pending.tabNode = node;
         pending.ptab = align === 'center' || align === 'right' ? align : 'left';
         break;
       }
@@ -170,11 +188,11 @@ function parseRun(
       }
       case 'delText':
         // Deleted text (inside <w:del>): shown struck through, never edited.
-        if (!inInstruction(fieldState)) emit(node.text ?? '');
+        if (!inInstruction(fieldState)) emit(node.text ?? '', node);
         break;
       case 'commentReference': {
         const comment = ctx.comment?.(attr(node, 'id') ?? '');
-        if (comment) emit('').comment = comment;
+        if (comment) emit('', node).comment = comment;
         break;
       }
       case 'footnoteReference':
@@ -184,29 +202,29 @@ function parseRun(
         if (!note) break;
         // customMarkFollows: the run's own text is the mark, so no number.
         const custom = attr(node, 'customMarkFollows');
-        const run = emit(custom && custom !== '0' && custom !== 'false' ? '' : note.number);
+        const run = emit(custom && custom !== '0' && custom !== 'false' ? '' : note.number, node);
         run.note = { kind, blocks: note.blocks };
         break;
       }
       case 'footnoteRef':
       case 'endnoteRef':
         // Inside the note itself: the same number its reference shows.
-        if (ctx.noteNumber !== undefined) emit(ctx.noteNumber);
+        if (ctx.noteNumber !== undefined) emit(ctx.noteNumber, node);
         break;
       case 'separator':
       case 'continuationSeparator':
-        emit('').separator = true;
+        emit('', node).separator = true;
         break;
       case 'noBreakHyphen':
-        if (!inInstruction(fieldState)) emit('‑');
+        if (!inInstruction(fieldState)) emit('‑', node);
         break;
       case 'softHyphen':
-        if (!inInstruction(fieldState)) emit('­');
+        if (!inInstruction(fieldState)) emit('­', node);
         break;
       case 'sym': {
         const code = parseInt(attr(node, 'char') ?? '', 16);
         if (Number.isFinite(code) && !inInstruction(fieldState)) {
-          emit(symbolChar(code, attr(node, 'font')));
+          emit(symbolChar(code, attr(node, 'font')), node);
         }
         break;
       }
@@ -216,7 +234,7 @@ function parseRun(
       case 'AlternateContent': {
         const res = parseRunDrawing(node, ctx);
         if (res?.inline) {
-          const run = emit('');
+          const run = emit('', node);
           run.drawing = res.inline;
         } else if (res?.anchor) {
           anchors?.push(res.anchor);
@@ -228,8 +246,9 @@ function parseRun(
     }
   }
 
-  // A run that is only a <w:br>/<w:tab> with no text still needs to emit the break.
-  if (out.length === 0 && (pending.breakBefore || pending.tabBefore)) emit('');
+  // A break or tab with no text after it in this run (a run that is only a
+  // <w:br>, or "text<w:tab/>") still needs emitting, or it would be lost.
+  if (pending.breakBefore || pending.tabBefore) emit('');
   return out;
 }
 

@@ -87,13 +87,17 @@ export function parseParagraph(p: XmlNode, ctx: ParseContext, tableBase?: TableB
     } else if (name === 'commentRangeEnd') {
       open?.delete(attr(node, 'id') ?? '');
     } else if (name === 'oMath') {
-      runs.push({ text: '', math: ommlToMath(node) });
+      const run: DocxRun = { text: '', math: ommlToMath(node) };
+      ctx.recordSource?.(run, node);
+      runs.push(run);
     } else if (name === 'oMathPara') {
       // A display equation: each <m:oMath> on its own line, centred by default.
       const jc = attr(child(child(node, 'oMathParaPr'), 'jc'), 'val');
       mathDisplay = { align: jc === 'left' ? 'left' : jc === 'right' ? 'right' : 'center' };
       children(node, 'oMath').forEach((m, i) => {
-        runs.push({ text: '', math: ommlToMath(m), ...(i > 0 ? { breakBefore: true } : {}) });
+        const run: DocxRun = { text: '', math: ommlToMath(m), ...(i > 0 ? { breakBefore: true } : {}) };
+        ctx.recordSource?.(run, m);
+        runs.push(run);
       });
     }
   }

@@ -11,18 +11,13 @@ import { renderPage, layoutTabs, renderCommentRail, layoutComments, COMMENT_RAIL
 import { installFallbackFonts, fontStack } from '../../oxml/fontMetrics.js';
 import { installWebFontFamilies, type FontInstallation, type WebFontOptions } from '../../oxml/webfonts.js';
 import { collectDocxFonts } from './fonts.js';
-import { paginate } from './paginate.js';
+import { paginate, clearLayoutCache, blockSignature } from './paginate.js';
 import { DocxEditContext } from '../edit/context.js';
-import { DocxEditSession } from '../edit/session.js';
-import { reconcileParagraph } from '../edit/reconcile.js';
-import { renderFlow } from '../edit/flow.js';
-import { readRunFormat } from '../edit/format.js';
-import { EDIT_ATTR } from '../../oxml/edit/attrs.js';
-import { installEditStyles, type TextBoxOutline } from '../../oxml/edit/styles.js';
-import { applyFormatToSelection, formatAtSelection } from '../../oxml/edit/selection.js';
+import { DocxEditSession, type DocxParaFormat } from '../edit/session.js';
+import { DocxEditController } from '../edit/controller.js';
+import type { TextBoxOutline } from '../../oxml/edit/styles.js';
 import type { RunFormat } from '../../oxml/edit/format.js';
-import type { DocxParagraph } from '../model.js';
-import type { DocxPage } from '../model.js';
+import type { DocxBlock, DocxPage } from '../model.js';
 
 export interface DocxViewerOptions {
   startIndex?: number;
@@ -39,17 +34,19 @@ export interface DocxViewerOptions {
   /** Called whenever the effective zoom scale changes (1 = 100%). */
   onScaleChange?: (scale: number) => void;
   /**
-   * Edit the document's body text in place. Editing renders the document as one
-   * continuous column rather than fixed pages — see edit/flow.ts for why — and
-   * re-paginates when editing is switched off. Header and footer text stays
-   * read-only. Off by default.
+   * Edit the document as in Word's Print Layout: type straight onto the pages,
+   * with the caret and selection running across paragraphs, tables and page
+   * breaks, and the pages re-laid out as the text changes. Header, footer and
+   * footnote text stays read-only. Off by default.
    */
   editable?: boolean;
-  /** Called after a committed edit, undo or redo. */
+  /** Called after each edit, undo or redo. */
   onEdit?: () => void;
-  /** Called when the caret moves, with the formatting in effect there. */
+  /** Called when the caret moves, with the character formatting in effect there. */
   onSelectionChange?: (format: RunFormat) => void;
-  /** How editable paragraphs are outlined. Ignored unless `editable`. */
+  /** Called when the caret moves, with the paragraph formatting in effect there. */
+  onParaSelectionChange?: (format: DocxParaFormat) => void;
+  /** @deprecated Paragraphs are no longer outlined while editing; ignored. */
   textBoxOutline?: TextBoxOutline;
   /**
    * Fetch fonts the document uses but the machine lacks from Google Fonts —
@@ -83,12 +80,10 @@ export class DocxViewer {
   private editable: boolean;
   private editCtx: DocxEditContext | null = null;
   private session: DocxEditSession | null = null;
-  private flowEl: HTMLElement | null = null;
+  private controller: DocxEditController | null = null;
   private readonly onEdit: DocxViewerOptions['onEdit'];
   private readonly onSelectionChange: DocxViewerOptions['onSelectionChange'];
-  private focusOutHandler: ((e: FocusEvent) => void) | null = null;
-  private selectionHandler: (() => void) | null = null;
-  private disposeStyles: (() => void) | null = null;
+  private readonly onParaSelectionChange: DocxViewerOptions['onParaSelectionChange'];
   private readonly onChange: DocxViewerOptions['onChange'];
   private readonly onScaleChange: DocxViewerOptions['onScaleChange'];
   /** 'fit-width' recomputes on resize; a number is a fixed user zoom. */
@@ -114,17 +109,10 @@ export class DocxViewer {
     if (options.onScaleChange) this.onScaleChange = options.onScaleChange;
     if (options.onEdit) this.onEdit = options.onEdit;
     if (options.onSelectionChange) this.onSelectionChange = options.onSelectionChange;
+    if (options.onParaSelectionChange) this.onParaSelectionChange = options.onParaSelectionChange;
     this.editable = options.editable ?? false;
     this.revisions = options.trackChanges ?? 'markup';
     this.showComments = options.comments ?? true;
-    if (this.editable) {
-      this.editCtx = new DocxEditContext(doc);
-      this.session = new DocxEditSession(doc, { onChange: () => this.onEdit?.() });
-      this.disposeStyles = installEditStyles(
-        container.ownerDocument,
-        options.textBoxOutline ?? 'hover',
-      );
-    }
 
     container.style.overflow = 'auto';
     container.style.background = '#525659';
@@ -162,10 +150,13 @@ export class DocxViewer {
     Promise.all([this.fonts.ready, localLoads]).then(() => this.refreshAfterFonts());
 
     this.pageModels = [];
+    if (this.editable) {
+      this.editCtx = new DocxEditContext(doc);
+      this.enableEditing();
+    }
     this.renderContent();
 
     if (options.keyboard !== false) this.enableKeyboard();
-    if (this.editable) this.enableEditing();
     this.scrollHandler = () => this.updateCurrentFromScroll();
     container.addEventListener('scroll', this.scrollHandler, { passive: true });
     this.resizeObserver = new ResizeObserver(() => this.applyScale());
@@ -309,7 +300,7 @@ export class DocxViewer {
 
   // ─── Editing ───────────────────────────────────────────────────────────────
 
-  /** Render either the paginated page stack or the continuous edit flow. */
+  /** Lay the document out into pages and draw them (with edit stamps when editing). */
   private renderContent(): void {
     const deps = {
       imageUrl: (p: string) => this.doc.imageUrl(p),
@@ -318,41 +309,51 @@ export class DocxViewer {
       ...(this.editCtx ? { edit: this.editCtx } : {}),
     };
     this.editCtx?.reset();
-    this.pagesEl.replaceChildren();
     this.pageEls.length = 0;
-    this.flowEl = null;
-
-    if (this.editable) {
-      this.flowEl = renderFlow(this.doc.sections, deps);
-      this.pagesEl.appendChild(this.flowEl);
-      layoutTabs(this.flowEl);
-      // Pages are meaningless in flow mode; keep one entry so counts stay sane.
-      this.pageModels = this.pageModels.length ? this.pageModels : [];
-      return;
-    }
+    this.controller?.invalidate();
 
     // Flow sections into fixed-size pages (needs the DOM for measurement).
     this.pageModels = paginate(this.doc.sections, deps);
-    this.railW = 0;
-    for (const page of this.pageModels) {
-      const sheet = renderPage(page, deps);
-      // A page with comments carries their cards in a rail beside it, as
-      // Word's markup pane does.
-      const rail = this.showComments ? renderCommentRail(page, deps) : undefined;
-      let el: HTMLElement = sheet;
-      if (rail) {
-        el = document.createElement('div');
-        el.style.display = 'flex';
-        el.style.alignItems = 'flex-start';
-        sheet.style.margin = '0';
-        el.append(sheet, rail);
-        this.railW = COMMENT_RAIL_PX + 12;
+    const previous = this.drawn;
+    this.drawn = [];
+    let rail = false;
+    this.pageModels.forEach((page, i) => {
+      // A page whose content — and whose edit stamps — are what is already on
+      // screen is kept: editing re-lays out the document on every keystroke,
+      // and redrawing twenty unchanged pages each time is what made it lag.
+      const sig = pageSignature(page, this.editCtx);
+      const old = previous[i];
+      const kept = old && old.sig === sig ? old : undefined;
+      const entry = kept ?? { sig, el: this.drawPage(page, deps), rail: false };
+      if (!kept) entry.rail = entry.el.firstElementChild?.nextElementSibling?.hasAttribute('data-cbx-comment-rail') ?? false;
+      if (entry.rail) rail = true;
+      this.drawn.push(entry);
+      this.pageEls.push(entry.el);
+      const at = this.pagesEl.children[i];
+      if (at !== entry.el) this.pagesEl.insertBefore(entry.el, at ?? null);
+      if (!kept) {
+        layoutTabs(entry.el);
+        if (entry.rail) layoutComments(entry.el);
       }
-      this.pageEls.push(el);
-      this.pagesEl.appendChild(el);
-      layoutTabs(el);
-      if (rail) layoutComments(el);
-    }
+    });
+    while (this.pagesEl.children.length > this.drawn.length) this.pagesEl.lastElementChild!.remove();
+    this.railW = rail ? COMMENT_RAIL_PX + 12 : 0;
+  }
+
+  /** Pages on screen, with the signature each was drawn from. */
+  private drawn: { sig: string; el: HTMLElement; rail: boolean }[] = [];
+
+  /** Draw one page — beside its comment cards, as Word's markup pane does. */
+  private drawPage(page: DocxPage, deps: Parameters<typeof renderPage>[1]): HTMLElement {
+    const sheet = renderPage(page, deps);
+    const rail = this.showComments ? renderCommentRail(page, deps) : undefined;
+    if (!rail) return sheet;
+    const el = document.createElement('div');
+    el.style.display = 'flex';
+    el.style.alignItems = 'flex-start';
+    sheet.style.margin = '0';
+    el.append(sheet, rail);
+    return el;
   }
 
   /**
@@ -362,101 +363,89 @@ export class DocxViewer {
    */
   private refreshAfterFonts(): void {
     if (this.destroyed) return;
-    if (this.editable && this.paragraphElOf(this.container.ownerDocument.activeElement)) return;
+    clearLayoutCache();
+    // Tab stops and comment cards were placed by measuring the old fonts.
+    this.drawn = [];
+    // Re-laying out mid-typing would lose the caret: keep it across the redraw.
+    const sel = this.controller?.readSelection();
+    const scroll = this.container.scrollTop;
     const page = this.index;
     this.renderContent();
     this.applyScale();
-    if (!this.editable && page > 0) this.goTo(page);
+    if (this.editable) {
+      this.container.scrollTop = scroll;
+      if (sel) this.controller?.setSelection(sel);
+      this.onChange?.(this.index, this.count);
+    } else if (page > 0) this.goTo(page);
     else this.onChange?.(this.index, this.count);
   }
 
-  /** The editable paragraph element an event target sits inside, if any. */
-  private paragraphElOf(target: EventTarget | null): HTMLElement | null {
-    if (!this.editable || !(target instanceof Node)) return null;
-    let node: Node | null = target;
-    while (node && node !== this.pagesEl) {
-      // The marker attribute is the signal: the renderer only stamps it on
-      // paragraphs it also made contentEditable. (isContentEditable would be
-      // equivalent in a browser but is unimplemented in jsdom.)
-      if (node.nodeType === 1 && (node as Element).hasAttribute(EDIT_ATTR.para)) {
-        return node as HTMLElement;
-      }
-      node = node.parentNode;
-    }
-    return null;
-  }
-
+  /** True if the event target is inside the editable page stack. */
   private isEditingTarget(target: EventTarget | null): boolean {
-    return this.paragraphElOf(target) !== null;
+    return this.editable && target instanceof Node && this.pagesEl.contains(target);
   }
 
   private enableEditing(): void {
-    // Commit when focus leaves a paragraph — including when it moves to another
-    // paragraph, which focusout reports and blur does not.
-    this.focusOutHandler = (e: FocusEvent) => {
-      const from = this.paragraphElOf(e.target);
-      if (!from) return;
-      const to = this.paragraphElOf(e.relatedTarget);
-      if (to === from) return;
-      this.commitParagraphEl(from);
-    };
-    this.container.addEventListener('focusout', this.focusOutHandler, true);
-
-    if (this.onSelectionChange) {
-      this.selectionHandler = () => {
-        if (!this.flowEl || !this.editCtx) return;
-        const sel = this.container.ownerDocument.getSelection();
-        if (!sel || sel.rangeCount === 0) return;
-        if (!this.isEditingTarget(sel.getRangeAt(0).startContainer)) return;
-        this.onSelectionChange?.(
-          formatAtSelection(this.flowEl, (k) => this.editCtx?.resolve(k), readRunFormat),
-        );
-      };
-      this.container.ownerDocument.addEventListener('selectionchange', this.selectionHandler);
-    }
+    this.editCtx ??= new DocxEditContext(this.doc);
+    this.session ??= new DocxEditSession(this.doc, { onChange: () => this.onEdit?.() });
+    this.controller = new DocxEditController({
+      host: this.pagesEl,
+      scroller: this.container,
+      session: this.session,
+      ctx: this.editCtx,
+      render: () => {
+        const scroll = this.container.scrollTop;
+        this.renderContent();
+        this.applyScale();
+        this.container.scrollTop = scroll;
+        this.updateCurrentFromScroll();
+      },
+      onSelectionChange: (format, para) => {
+        this.onSelectionChange?.(format);
+        this.onParaSelectionChange?.(para);
+      },
+    });
   }
 
-  /** Read one edited paragraph back into the XML and re-render. */
-  private commitParagraphEl(el: HTMLElement): boolean {
-    if (!this.editCtx || !this.session) return false;
-    const para = this.editCtx.resolve(el.getAttribute(EDIT_ATTR.para)) as
-      | DocxParagraph
-      | undefined;
-    if (!para) return false;
+  /** Kept for compatibility: edits now apply as they are made, so there is nothing to commit. */
+  commitActive(): boolean {
+    return false;
+  }
 
-    const edits = reconcileParagraph(el, (k) => this.editCtx?.resolve(k));
-    if (!this.session.commitParagraph(para, edits)) return false;
-    // Re-render so the committed XML — not the browser's improvised markup —
-    // is what the user is looking at.
-    this.renderContent();
-    this.applyScale();
+  /** Apply character formatting to the selection (or, with none, to what is typed next). */
+  applyFormat(format: RunFormat): boolean {
+    if (!this.controller) return false;
+    this.controller.format(format);
     return true;
   }
 
-  /** Commit whatever paragraph currently has focus, if any. */
-  commitActive(): boolean {
-    const el = this.paragraphElOf(this.container.ownerDocument.activeElement);
-    return el ? this.commitParagraphEl(el) : false;
+  /** Set alignment, spacing or the paragraph style on the selected paragraphs. */
+  applyParagraphFormat(format: DocxParaFormat): void {
+    this.controller?.paragraphFormat(format);
   }
 
-  /** Apply formatting to the current selection and commit it. */
-  applyFormat(format: RunFormat): boolean {
-    if (!this.editable || !this.flowEl) return false;
-    const changed = applyFormatToSelection(this.flowEl, format);
-    if (!changed) return false;
-    const el = this.paragraphElOf(changed) ?? changed;
-    return this.commitParagraphEl(el as HTMLElement);
+  /** Turn the selected paragraphs into a bulleted or numbered list, or back out of one. */
+  toggleList(kind: 'bullet' | 'number'): void {
+    this.controller?.toggleList(kind);
   }
 
-  /** Turn editing on or off, re-rendering into the matching layout. */
+  /** Increase (+1) or decrease (−1) the indent — a list item's level, else ½ inch. */
+  indent(delta: 1 | -1): void {
+    this.controller?.indent(delta);
+  }
+
+  /** The document's paragraph styles, for a style picker (quick styles first). */
+  paragraphStyles(): { id: string; name: string; quick: boolean }[] {
+    const session = this.session ?? new DocxEditSession(this.doc);
+    return session.styles().list.map(({ id, name, quick }) => ({ id, name, quick }));
+  }
+
+  /** Turn editing on or off. Both modes show the same pages. */
   setEditable(on: boolean): void {
     if (on === this.editable) return;
-    if (this.editable) this.commitActive();
     this.editable = on;
     if (on) {
-      this.editCtx ??= new DocxEditContext(this.doc);
-      this.session ??= new DocxEditSession(this.doc, { onChange: () => this.onEdit?.() });
-      this.disposeStyles ??= installEditStyles(this.container.ownerDocument, 'hover');
+      this.editCtx = new DocxEditContext(this.doc);
       this.enableEditing();
     } else {
       this.teardownEditing();
@@ -475,17 +464,11 @@ export class DocxViewer {
   }
 
   undo(): void {
-    if (this.session?.undo()) {
-      this.renderContent();
-      this.applyScale();
-    }
+    this.controller?.undo();
   }
 
   redo(): void {
-    if (this.session?.redo()) {
-      this.renderContent();
-      this.applyScale();
-    }
+    this.controller?.redo();
   }
 
   /** True if the document has unsaved edits. */
@@ -495,22 +478,12 @@ export class DocxViewer {
 
   /** Re-zip the document, edits included, as a .docx Blob. */
   exportBlob(): Blob {
-    // Flush anything still being typed before packaging.
-    this.commitActive();
     return this.doc.exportBlob();
   }
 
   private teardownEditing(): void {
-    if (this.focusOutHandler) {
-      this.container.removeEventListener('focusout', this.focusOutHandler, true);
-      this.focusOutHandler = null;
-    }
-    if (this.selectionHandler) {
-      this.container.ownerDocument.removeEventListener('selectionchange', this.selectionHandler);
-      this.selectionHandler = null;
-    }
-    this.disposeStyles?.();
-    this.disposeStyles = null;
+    this.controller?.destroy();
+    this.controller = null;
   }
 
   destroy(): void {
@@ -524,6 +497,15 @@ export class DocxViewer {
     this.pagesEl.remove();
     this.holder.remove();
   }
+}
+
+/** Everything a drawn page depends on, as one string (see {@link blockSignature}). */
+function pageSignature(page: DocxPage, ctx: DocxEditContext | null): string {
+  const blocks = (list: DocxBlock[] | undefined) => (list ?? []).map(blockSignature).join('\u0001');
+  const { elements, header, footer, footnotes, bands, ...rest } = page;
+  const bandSig = (bands ?? []).map((b) => `${JSON.stringify({ ...b, blocks: undefined })}:${b.blocks.map(blocks).join('\u0002')}`);
+  const stamps = ctx ? [elements, header, footer, footnotes].map((l) => ctx.fingerprint(l)).join('\u0003') : '';
+  return [JSON.stringify(rest), blocks(elements), blocks(header), blocks(footer), blocks(footnotes), bandSig.join('\u0004'), stamps].join('\u0005');
 }
 
 function clamp(n: number, lo: number, hi: number): number {

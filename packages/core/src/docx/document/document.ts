@@ -126,8 +126,8 @@ export class DocxDocument {
         parseBlocks: (container) => parseBlocks(container, c),
         // The context knows its own part, so header/footer content is
         // automatically distinguishable from the main document body.
-        recordSource: (model, node, owner) => {
-          this.sources.set(model, { node, part: partPath, ...(owner ? { owner } : {}) });
+        recordSource: (model, node, owner, pre) => {
+          this.sources.set(model, { node, part: partPath, ...(owner ? { owner } : {}), ...pre });
         },
       };
       return c;
@@ -187,6 +187,34 @@ export class DocxDocument {
     this.sources = new WeakMap();
     this.sections = this.parse();
     return this.sections;
+  }
+
+  /** Parsed XML of a part related to the document by type (styles, numbering…), if present. */
+  relatedXml(relType: string): { part: string; xml: XmlNode } | undefined {
+    const part = this.pkg.relByType(this.docPart, relType)?.target;
+    const xml = part ? this.pkg.getXml(part) : undefined;
+    return part && xml ? { part, xml } : undefined;
+  }
+
+  /**
+   * The document's part of a given relationship type, creating it from
+   * `initialXml` (with its relationship and content type) when there is none —
+   * e.g. numbering.xml the first time a list is made in a document without one.
+   */
+  ensureRelatedPart(relType: string, fileName: string, contentType: string, initialXml: string): { part: string; xml: XmlNode } {
+    const existing = this.relatedXml(relType);
+    if (existing) return existing;
+    const dir = this.docPart.includes('/') ? this.docPart.slice(0, this.docPart.lastIndexOf('/') + 1) : '';
+    const part = dir + fileName;
+    this.pkg.setPart(part, initialXml);
+    this.pkg.setContentTypeOverride(part, contentType);
+    this.pkg.addRelationship(this.docPart, relType, fileName);
+    return { part, xml: this.pkg.getXml(part)! };
+  }
+
+  /** Mark any part's cached XML as mutated so export re-serializes it. */
+  markPartDirty(part: string): void {
+    this.pkg.markDirty(part);
   }
 
   /** Mark the document part as mutated so export re-serializes it. */

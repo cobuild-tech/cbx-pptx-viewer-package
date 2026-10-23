@@ -2,7 +2,8 @@
  * @vitest-environment jsdom
  *
  * The DOM half of DOCX editing: render markers, reading an edited paragraph
- * back, and the viewer's continuous-flow / commit / undo / keyboard behaviour.
+ * back, and the viewer's Word-style editing on the laid-out pages: keystrokes
+ * arrive as \`beforeinput\` events and become commands on the XML.
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { zipSync, strToU8 } from 'fflate';
@@ -12,7 +13,6 @@ import { DocxViewer } from '../src/docx/viewer/viewer.js';
 import { DocxEditContext } from '../src/docx/edit/context.js';
 import { reconcileParagraph } from '../src/docx/edit/reconcile.js';
 import { renderBlock } from '../src/docx/render/dom.js';
-import { FLOW_CLASS } from '../src/docx/edit/flow.js';
 import { EDIT_ATTR } from '../src/oxml/edit/attrs.js';
 import type { DocxParagraph } from '../src/docx/model.js';
 
@@ -90,7 +90,7 @@ describe('docx edit — render markers', () => {
     const { el } = renderEditable(doc, 0);
 
     expect(el.getAttribute(EDIT_ATTR.para)).toBeTruthy();
-    expect(el.contentEditable).toBe('true');
+    expect(el.getAttribute('contenteditable')).toBe('true');
     expect(el.querySelectorAll(`[${EDIT_ATTR.run}]`)).toHaveLength(2);
   });
 
@@ -208,107 +208,126 @@ describe('docx edit — viewer', () => {
     return { doc, viewer };
   }
 
+  const paraEls = () => [...container.querySelectorAll<HTMLElement>(`[${EDIT_ATTR.para}]`)];
+  const host = () => container.querySelector<HTMLElement>('[contenteditable="true"]')!;
+
+  /** Put the caret (or a selection) in the text of a paragraph's first run. */
+  function select(paraIndex: number, start: number, end = start) {
+    const text = paraEls()[paraIndex]!.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild as Text;
+    document.getSelection()!.setBaseAndExtent(text, start, text, end);
+  }
+
+  function input(inputType: string, data?: string) {
+    const e = new InputEvent('beforeinput', { inputType, data: data ?? null, bubbles: true, cancelable: true });
+    host().dispatchEvent(e);
+    return e;
+  }
+
+  function caretOffset(): { text: string; offset: number } {
+    const s = document.getSelection()!;
+    return { text: s.focusNode!.textContent ?? '', offset: s.focusOffset };
+  }
+
   it('paginates into page sheets when read-only', () => {
     mount(false);
-    expect(container.querySelector(`.${FLOW_CLASS}`)).toBeNull();
+    expect(container.querySelector('[contenteditable="true"]')).toBeNull();
     expect(container.querySelector(`[${EDIT_ATTR.para}]`)).toBeNull();
   });
 
-  it('renders one continuous flow when editable', () => {
-    mount(true);
-    const flow = container.querySelector(`.${FLOW_CLASS}`);
-    expect(flow).not.toBeNull();
-    expect(flow!.querySelectorAll(`[${EDIT_ATTR.para}]`).length).toBeGreaterThan(0);
+  it('edits on the same pages, as one editable surface', () => {
+    const { viewer } = mount(true);
+    expect(viewer.count).toBeGreaterThan(0);
+    expect(paraEls().length).toBe(3);
+    // The paragraphs sit inside one editing host, so a selection can span them.
+    expect(paraEls().every((p) => host().contains(p) && p !== host())).toBe(true);
   });
 
-  it('commits an edit when focus leaves the paragraph', () => {
+  it('types at the caret and keeps the caret after the typed text', () => {
     const { doc, viewer } = mount(true);
-    const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;
-    el.querySelector(`[${EDIT_ATTR.run}]`)!.textContent = 'Farewell ';
-
-    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-
-    expect(textOf(paras(doc)[0]!)).toBe('Farewell World');
+    select(0, 5);
+    const e = input('insertText', ',');
+    expect(e.defaultPrevented).toBe(true);
+    expect(textOf(paras(doc)[0]!)).toBe('Hello, World');
+    expect(container.textContent).toContain('Hello, World');
+    expect(caretOffset()).toEqual({ text: 'Hello, ', offset: 6 });
     expect(viewer.hasEdits).toBe(true);
-    expect(container.textContent).toContain('Farewell');
+  });
+
+  it('splits the paragraph on Enter and joins it back on Backspace', () => {
+    const { doc } = mount(true);
+    select(0, 3);
+    input('insertParagraph');
+    expect(paras(doc).map(textOf).slice(0, 2)).toEqual(['Hel', 'lo World']);
+    input('deleteContentBackward');
+    expect(textOf(paras(doc)[0]!)).toBe('Hello World');
+  });
+
+  it('deletes a selection that spans paragraphs', () => {
+    const { doc } = mount(true);
+    const from = paraEls()[0]!.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild as Text;
+    const to = paraEls()[1]!.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild as Text;
+    document.getSelection()!.setBaseAndExtent(from, 2, to, 3);
+    input('deleteContentBackward');
+    expect(textOf(paras(doc)[0]!)).toBe('Heted');
   });
 
   it('formats the selected text', () => {
     const { doc, viewer } = mount(true);
-    const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;
-    const text = el.querySelector(`[${EDIT_ATTR.run}]`)!.firstChild as Text;
-    const range = document.createRange();
-    range.setStart(text, 0);
-    range.setEnd(text, 5);
-    const sel = document.getSelection()!;
-    sel.removeAllRanges();
-    sel.addRange(range);
-
-    // 'Hello ' is plain and 'World' is already bold in the fixture, so bolding
-    // the first five characters must leave exactly 'Hello' newly bold and the
-    // text untouched. A DOCX paragraph is its own editable unit and carries no
-    // body marker, so requiring one made every formatting command a no-op.
+    select(0, 0, 5);
     expect(viewer.applyFormat({ bold: true })).toBe(true);
     const runs = paras(doc)[0]!.runs;
     expect(runs.map((r) => r.text).join('')).toBe('Hello World');
     expect(runs.filter((r) => r.bold).map((r) => r.text)).toEqual(['Hello', 'World']);
-    expect(viewer.hasEdits).toBe(true);
   });
 
-  it('undoes and redoes a committed edit', () => {
+  it('types in a pending format chosen with nothing selected', () => {
     const { doc, viewer } = mount(true);
-    const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;
-    el.querySelector(`[${EDIT_ATTR.run}]`)!.textContent = 'Farewell ';
-    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-    expect(viewer.canUndo).toBe(true);
+    select(0, 6);
+    viewer.applyFormat({ italic: true });
+    input('insertText', 'x');
+    expect(paras(doc)[0]!.runs.find((r) => r.text === 'x')?.italic).toBe(true);
+  });
 
+  it('undoes and redoes, putting the caret back', () => {
+    const { doc, viewer } = mount(true);
+    select(0, 5);
+    input('insertText', '!');
+    expect(viewer.canUndo).toBe(true);
     viewer.undo();
     expect(textOf(paras(doc)[0]!)).toBe('Hello World');
+    expect(caretOffset().offset).toBe(5);
     viewer.redo();
-    expect(textOf(paras(doc)[0]!)).toBe('Farewell World');
+    expect(textOf(paras(doc)[0]!)).toBe('Hello! World');
   });
 
   it('keeps list numbering correct across edit-driven re-renders', () => {
     const { doc } = mount(true);
-    const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;
-    el.querySelector(`[${EDIT_ATTR.run}]`)!.textContent = 'Changed ';
-    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-
+    select(0, 0);
+    input('insertText', 'A');
     expect(paras(doc).find((p) => p.listMarker)?.listMarker).toBe('1.');
   });
 
   it('does not navigate pages while the caret is in text', () => {
-    const { viewer } = mount(true);
-    const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;
-
+    mount(true);
     const key = new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true });
-    el.dispatchEvent(key);
+    paraEls()[0]!.dispatchEvent(key);
     expect(key.defaultPrevented).toBe(false);
-
-    const outside = new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true, cancelable: true });
-    container.dispatchEvent(outside);
-    expect(outside.defaultPrevented).toBe(true);
-    expect(viewer).toBeTruthy();
   });
 
-  it('re-paginates when editing is switched back off', () => {
+  it('switches editing on and off over the same pages', () => {
     const { viewer } = mount(false);
     const pagesBefore = viewer.count;
-
     viewer.setEditable(true);
-    expect(container.querySelector(`.${FLOW_CLASS}`)).not.toBeNull();
-
+    expect(host()).not.toBeNull();
     viewer.setEditable(false);
-    expect(container.querySelector(`.${FLOW_CLASS}`)).toBeNull();
+    expect(container.querySelector('[contenteditable="true"]')).toBeNull();
     expect(viewer.count).toBe(pagesBefore);
   });
 
   it('exports a document that reloads with the edit applied', () => {
     const { doc } = mount(true);
-    const el = container.querySelector(`[${EDIT_ATTR.para}]`) as HTMLElement;
-    el.querySelector(`[${EDIT_ATTR.run}]`)!.textContent = 'Farewell ';
-    el.dispatchEvent(new FocusEvent('focusout', { bubbles: true }));
-
+    select(0, 0, 5);
+    input('insertText', 'Farewell');
     const reloaded = DocxDocument.load(doc.toBytes());
     expect(textOf(paras(reloaded)[0]!)).toBe('Farewell World');
   });
