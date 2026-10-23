@@ -126,7 +126,7 @@ packages/core/src/
 
 ## Usage
 
-## Install
+## Install 
 
 ```bash
 npm install @cobuildx.ai/office-viewer
