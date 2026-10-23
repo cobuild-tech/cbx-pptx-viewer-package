@@ -21,6 +21,12 @@ export const EDIT_ATTR = {
    * reconciliation reads it back as a tab rather than skipping it.
    */
   tab: 'data-cbx-tab',
+  /**
+   * What part of a run an element draws (DOCX): `br` and `tab` for the break
+   * or tab before its text, `obj` for a picture, equation or note mark the run
+   * stands for. Absent on the run's text itself. The caret maps through it.
+   */
+  part: 'data-cbx-part',
   /** Marks a shape the user may select and move (PPTX). */
   shape: 'data-cbx-shape',
   /**

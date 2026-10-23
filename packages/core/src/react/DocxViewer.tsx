@@ -4,10 +4,13 @@ import type { WebFontOptions } from '../oxml/webfonts.js';
 import {
   DocxViewer as DocxViewerController,
   type DocxDocument,
+  type DocxParaFormat,
   type RunFormat,
 } from '../index.js';
 import { useDocument, type DocxSource } from './useDocument.js';
 import { EditorToolbar } from './EditorToolbar.js';
+import { ParaControls } from './ParaControls.js';
+import { ToolbarGroup, ToolbarSelect } from './ToolbarUi.js';
 
 export interface DocxViewerHandle {
   next(): void;
@@ -38,9 +41,10 @@ export interface DocxViewerProps {
   onError?: (error: Error) => void;
   onPageChange?: (index: number, count: number) => void;
   /**
-   * Edit the document's body text in place. Editing renders the document as a
-   * single continuous column rather than fixed pages; header and footer text
-   * stays read-only. Off by default.
+   * Edit the document as in Word: type straight onto the pages, with the
+   * caret and selection running across paragraphs and pages, and the pages
+   * re-laid out as the text changes. Header and footer text stays read-only.
+   * Off by default.
    */
   editable?: boolean;
   /** Show the formatting toolbar when `editable`. Default true. */
@@ -84,6 +88,8 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
   const [count, setCount] = useState(0);
   const [scale, setScale] = useState(1);
   const [format, setFormat] = useState<RunFormat>({});
+  const [paraFormat, setParaFormat] = useState<DocxParaFormat>({});
+  const [styles, setStyles] = useState<{ id: string; name: string; quick: boolean }[]>([]);
   // The viewer owns undo/redo state; mirror it so the toolbar re-renders.
   const [editState, setEditState] = useState({ canUndo: false, canRedo: false, hasEdits: false });
 
@@ -114,8 +120,10 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
         onEdit?.();
       },
       onSelectionChange: setFormat,
+      onParaSelectionChange: setParaFormat,
     });
     viewerRef.current = viewer;
+    if (editable) setStyles(viewer.paragraphStyles());
     return () => {
       viewer.destroy();
       viewerRef.current = null;
@@ -165,6 +173,25 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
           hasEdits={editState.hasEdits}
           onExport={downloadEdits}
           exportLabel="Download .docx"
+          extras={
+            <>
+              <ParaControls
+                format={paraFormat}
+                onToggleList={(kind) => viewerRef.current?.toggleList(kind)}
+                onIndent={(d) => viewerRef.current?.indent(d < 0 ? -1 : 1)}
+                onFormat={(f) => viewerRef.current?.applyParagraphFormat(f)}
+              />
+              <ToolbarGroup label="Styles">
+                <ToolbarSelect
+                  title="Paragraph style"
+                  value={paraFormat.styleId}
+                  width={132}
+                  options={styleOptions(styles, paraFormat.styleId)}
+                  onChange={(id) => viewerRef.current?.applyParagraphFormat({ styleId: id })}
+                />
+              </ToolbarGroup>
+            </>
+          }
         />
       )}
       <div ref={stageRef} style={{ flex: 1, minHeight: 0 }} />
@@ -203,6 +230,19 @@ export const DocxViewer = forwardRef<DocxViewerHandle, DocxViewerProps>(function
     </div>
   );
 });
+
+/**
+ * The style gallery: the document's quick styles (Word's gallery), plus the
+ * style the caret is in when that is not one of them.
+ */
+function styleOptions(styles: { id: string; name: string; quick: boolean }[], current: string | undefined) {
+  const pretty = (name: string) => {
+    const h = /^heading (\d)$/i.exec(name);
+    return h ? `Heading ${h[1]}` : name.charAt(0).toUpperCase() + name.slice(1);
+  };
+  const shown = styles.filter((s) => s.quick || s.id === current);
+  return (shown.length ? shown : styles).map((s) => ({ value: s.id, label: pretty(s.name) }));
+}
 
 const statusStyle: CSSProperties = {
   padding: '8px 12px',

@@ -56,7 +56,7 @@ function prefixOf(name: string): string {
  * The WordprocessingML prefix in use, learned from an existing node rather than
  * assumed — not every producer writes "w:".
  */
-function wordPrefix(body: XmlNode): string {
+export function wordPrefix(body: XmlNode): string {
   const stack: XmlNode[] = [body];
   while (stack.length) {
     const node = stack.shift()!;

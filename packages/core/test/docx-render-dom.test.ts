@@ -108,7 +108,8 @@ describe('docx render — paragraphs', () => {
     const el = renderBlock(firstPara(doc), { ...deps, edit: ctx });
     const mark = [...el.querySelectorAll('span')].find((s) => s.textContent === '1')!;
     expect(mark.getAttribute('contenteditable')).toBe('false');
-    expect(mark.hasAttribute(EDIT_ATTR.run)).toBe(false);
+    // Mapped as one object atom: the caret steps over it, never into it.
+    expect(mark.getAttribute(EDIT_ATTR.part)).toBe('obj');
     expect(mark.style.verticalAlign).toBe('super');
   });
 });

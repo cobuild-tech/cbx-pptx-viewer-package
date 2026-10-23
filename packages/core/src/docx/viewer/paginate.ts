@@ -23,6 +23,7 @@
  *
  * Requires a DOM (browser); it runs at viewer mount, not at parse time.
  */
+import { derive } from '../origin.js';
 import { renderBlock, layoutTabs, stackBlocks, applyWordTextDefaults, anchorFloat, SHEET_FONT, isPageAnchored, type RenderDeps } from '../render/dom.js';
 import { formatPageNumber } from '../numbering/numbering.js';
 import type {
@@ -31,6 +32,7 @@ import type {
   DocxBlock,
   DocxParagraph,
   DocxTable,
+  DocxTableCell,
   DocxRun,
   DocxAnchor,
   DocxPageSize,
@@ -39,6 +41,8 @@ import type {
 
 /** Flow every section into fixed-size pages. */
 export function paginate(sections: DocxSection[], deps: RenderDeps): DocxPage[] {
+  // Signatures are memoised for one pass only: an edit may change a block in place.
+  SIGNATURES = new WeakMap();
   const measure = createMeasurer();
   try {
     const pages: DocxPage[] = [];
@@ -111,6 +115,15 @@ function createMeasurer(): Measurer {
     el,
     margins: (block) => margins.get(block) ?? { top: 0, bottom: 0 },
     height(block, deps, widthPx, stubs) {
+      // A block measured before at this width, beside the same floats, takes
+      // the same room: editing re-lays out the whole document on every
+      // keystroke, and only what changed should pay for a browser layout.
+      const key = `${widthPx}|${deps.column?.leftPx ?? ''}|${deps.revisions ?? ''}|${deps.comments ?? ''}|${(stubs ?? []).map((f) => `${f.side}${f.width}x${f.height}`).join(',')}|${blockSignature(block)}`;
+      const hit = HEIGHTS.get(key);
+      if (hit) {
+        margins.set(block, hit.m);
+        return hit.h;
+      }
       el.style.width = `${widthPx}px`;
       const stubEls = (stubs ?? []).map((f) => {
         const d = document.createElement('div');
@@ -128,9 +141,59 @@ function createMeasurer(): Measurer {
       const h = child.getBoundingClientRect().height;
       const m = { top: parseFloat(cs.marginTop || '0'), bottom: parseFloat(cs.marginBottom || '0') };
       margins.set(block, m);
+      if (HEIGHTS.size > MAX_HEIGHTS) HEIGHTS.clear();
+      HEIGHTS.set(key, { h: h + m.top + m.bottom, m });
       return h + m.top + m.bottom;
     },
   };
+}
+
+/** Measured block heights by content signature (see {@link blockSignature}). */
+const HEIGHTS = new Map<string, { h: number; m: { top: number; bottom: number } }>();
+const MAX_HEIGHTS = 20000;
+
+/**
+ * Forget every measured height. Measurements depend on the fonts in use, so
+ * this must run whenever a font finishes loading.
+ */
+export function clearLayoutCache(): void {
+  HEIGHTS.clear();
+}
+
+let SIGNATURES = new WeakMap<object, string>();
+
+/**
+ * A string that is equal for two blocks exactly when they lay out the same:
+ * the block's whole model, which is plain data. Memoised per object, and a
+ * table is signed by row so that measuring it a few rows at a time (to find
+ * where it breaks) does not re-serialise every cell each time.
+ */
+export function blockSignature(block: DocxBlock): string {
+  const memo = SIGNATURES.get(block);
+  if (memo) return memo;
+  let sig: string;
+  if (block.kind === 'table') {
+    const { rows, ...rest } = block;
+    sig = `T${JSON.stringify(rest)}[${rows.map(rowSignature).join('|')}]`;
+  } else {
+    sig = JSON.stringify(block);
+  }
+  SIGNATURES.set(block, sig);
+  return sig;
+}
+
+function rowSignature(row: (DocxTableCell | null)[]): string {
+  const memo = SIGNATURES.get(row);
+  if (memo) return memo;
+  const sig = row
+    .map((c) => {
+      if (!c) return '-';
+      const { content, ...rest } = c;
+      return `${JSON.stringify(rest)}{${content.map(blockSignature).join(',')}}`;
+    })
+    .join(';');
+  SIGNATURES.set(row, sig);
+  return sig;
 }
 
 /** Header/footer reserve and geometry of one kind of page in a section. */
@@ -261,7 +324,7 @@ class PageFlow {
       }
       // Word drops space-before at the top of a page the text overflowed onto.
       if (topOfNaturalPage && block.kind === 'paragraph' && block.spaceBeforePt) {
-        block = { ...block, spaceBeforePt: undefined };
+        block = derive({ ...block, spaceBeforePt: undefined }, block);
       }
       topOfNaturalPage = false;
 
@@ -671,11 +734,11 @@ function expandPageBreaks(blocks: DocxBlock[]): DocxBlock[] {
     let first = true;
     const pushPart = (end: number) => {
       const runs = b.runs.slice(start, end);
-      const part: DocxParagraph = { ...b, runs };
+      const part: DocxParagraph = derive({ ...b, runs }, b);
       if (!first) {
         // The break itself is consumed; the part begins the next page (or column).
         if (runs[0]!.columnBreak) part.columnBreakBefore = true;
-        runs[0] = { ...runs[0]!, breakBefore: undefined, pageBreakBefore: undefined, columnBreak: undefined };
+        runs[0] = derive({ ...runs[0]!, breakBefore: undefined, pageBreakBefore: undefined, columnBreak: undefined }, runs[0]!);
         part.pageBreakBefore = true;
         part.listMarker = undefined;
         part.spaceBeforePt = undefined;
@@ -691,7 +754,7 @@ function expandPageBreaks(blocks: DocxBlock[]): DocxBlock[] {
         start = i;
       } else if (r.pageBreakBefore && i === 0) {
         // A paragraph opening with a page break: its text starts the next page.
-        out.push({ ...b, runs: [], listMarker: undefined, spaceAfterPt: undefined, anchors: undefined });
+        out.push(derive({ ...b, runs: [], listMarker: undefined, spaceAfterPt: undefined, anchors: undefined }, b));
         first = false;
       }
     });
@@ -872,16 +935,17 @@ function slice(p: DocxParagraph, start: number, end: number, part: 'head' | 'tai
       const text = len === 0 ? '' : run.text.slice(s - off, e - off);
       // Keep a break/tab only when this run begins within the slice.
       const atStart = off >= start && off < end;
-      runs.push({
+      const copy: DocxRun = {
         ...run,
         text,
         ...(atStart || len === 0 ? {} : { breakBefore: undefined, tabBefore: undefined, ptab: undefined }),
-      });
+      };
+      runs.push(derive(copy, run, len === 0 ? 0 : s - off));
     }
     off += len;
   }
 
-  const out: DocxParagraph = { ...p, runs };
+  const out: DocxParagraph = derive({ ...p, runs }, p);
   if (part === 'head') {
     out.spaceAfterPt = undefined;
   } else if (part === 'tail') {

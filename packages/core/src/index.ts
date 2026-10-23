@@ -31,8 +31,8 @@
  *   viewer.applyFormat({ bold: true });   // formats the selected cells
  *   const blob = viewer.exportBlob();     // a valid .xlsx with the edits
  *
- * DOCX editing (text): pass `editable`, which renders the document as one
- * continuous column instead of fixed pages (see docx/edit/flow.ts).
+ * DOCX editing: pass `editable` to type straight onto the pages, as in Word's
+ * Print Layout (see docx/edit/controller.ts).
  *   const viewer = createDocxViewer(doc, containerEl, { editable: true });
  *   viewer.applyFormat({ bold: true });
  *   const blob = viewer.exportBlob();
@@ -145,7 +145,14 @@ export type {
 } from './docx/model.js';
 
 // DOCX text editing (opt in with `editable` on the viewer).
-export { DocxEditSession, type DocxEditSessionOptions } from './docx/edit/session.js';
+export {
+  DocxEditSession,
+  type DocxEditSessionOptions,
+  type DocPos,
+  type DocSel,
+  type DocxParaFormat,
+} from './docx/edit/session.js';
+export { DocxEditController, type DocxEditControllerOptions } from './docx/edit/controller.js';
 export { DocxEditContext, type DocxEditRenderContext } from './docx/edit/context.js';
 export { reconcileParagraph } from './docx/edit/reconcile.js';
 export {
