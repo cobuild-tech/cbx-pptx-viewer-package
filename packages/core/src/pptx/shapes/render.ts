@@ -179,7 +179,7 @@ export function strokeOverlay(
   if (evenodd) path.setAttribute('fill-rule', 'evenodd');
   path.setAttribute('fill', fill ? colorToCss(stroke.color) : 'none');
   if (!fill) {
-    path.setAttribute('stroke', colorToCss(stroke.color));
+    path.setAttribute('stroke', strokePaint(svg, stroke, Math.max(w, 1), Math.max(h, 1)));
     path.setAttribute('stroke-width', `${stroke.width}`);
     if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash.join(','));
     if (stroke.cap) path.setAttribute('stroke-linecap', stroke.cap);
@@ -211,15 +211,18 @@ function applyLineEnds(svg: SVGSVGElement, path: SVGPathElement, stroke: Stroke)
     defs = document.createElementNS(SVG_NS, 'defs');
     svg.insertBefore(defs, svg.firstChild);
   }
-  const color = colorToCss(stroke.color);
+  // On a gradient line each arrowhead takes the colour of its own end.
+  const stops = stroke.gradient?.stops;
+  const headColor = colorToCss(stops ? stops[0]!.color : stroke.color);
+  const tailColor = colorToCss(stops ? stops[stops.length - 1]!.color : stroke.color);
   if (stroke.headEnd) {
     const id = `le-${Math.random().toString(36).slice(2, 9)}`;
-    defs.appendChild(makeMarker(id, stroke.headEnd, color));
+    defs.appendChild(makeMarker(id, stroke.headEnd, headColor));
     path.setAttribute('marker-start', `url(#${id})`);
   }
   if (stroke.tailEnd) {
     const id = `le-${Math.random().toString(36).slice(2, 9)}`;
-    defs.appendChild(makeMarker(id, stroke.tailEnd, color));
+    defs.appendChild(makeMarker(id, stroke.tailEnd, tailColor));
     path.setAttribute('marker-end', `url(#${id})`);
   }
 }
@@ -254,39 +257,7 @@ function setupSvgFill(svg: SVGSVGElement, fill: Fill | undefined, deps: RenderDe
   const fillId = `fill-${Math.random().toString(36).slice(2, 9)}`;
 
   if (fill.type === 'gradient') {
-    const grad = document.createElementNS(
-      SVG_NS,
-      fill.radial ? 'radialGradient' : 'linearGradient',
-    );
-    grad.setAttribute('id', fillId);
-
-    if (!fill.radial) {
-      const angleRad = ((fill.angle ?? 0) * Math.PI) / 180;
-      const dx = Math.sin(angleRad);
-      const dy = -Math.cos(angleRad);
-      const x1 = 0.5 - dx * 0.5;
-      const y1 = 0.5 - dy * 0.5;
-      const x2 = 0.5 + dx * 0.5;
-      const y2 = 0.5 + dy * 0.5;
-      grad.setAttribute('x1', `${(x1 * 100).toFixed(1)}%`);
-      grad.setAttribute('y1', `${(y1 * 100).toFixed(1)}%`);
-      grad.setAttribute('x2', `${(x2 * 100).toFixed(1)}%`);
-      grad.setAttribute('y2', `${(y2 * 100).toFixed(1)}%`);
-    } else if (fill.center) {
-      // Focus the radial gradient (the first stop) at the path's center point.
-      grad.setAttribute('cx', `${(fill.center.x * 100).toFixed(1)}%`);
-      grad.setAttribute('cy', `${(fill.center.y * 100).toFixed(1)}%`);
-      grad.setAttribute('fx', `${(fill.center.x * 100).toFixed(1)}%`);
-      grad.setAttribute('fy', `${(fill.center.y * 100).toFixed(1)}%`);
-    }
-
-    for (const stop of fill.stops) {
-      const s = document.createElementNS(SVG_NS, 'stop');
-      s.setAttribute('offset', `${(stop.pos * 100).toFixed(1)}%`);
-      s.setAttribute('stop-color', colorToCss(stop.color));
-      grad.appendChild(s);
-    }
-    defs.appendChild(grad);
+    defs.appendChild(svgGradient(fill, fillId));
     return `url(#${fillId})`;
   }
 
@@ -313,6 +284,69 @@ function setupSvgFill(svg: SVGSVGElement, fill: Fill | undefined, deps: RenderDe
   return 'none';
 }
 
+type GradientFill = Extract<Fill, { type: 'gradient' }>;
+
+/**
+ * An SVG gradient for a {@link GradientFill}. By default it spans the painted
+ * element's bounding box. `box` instead states it in user space over a box of
+ * that size — what a stroke needs, since the bounding box of a straight line
+ * has no height and SVG paints nothing with a gradient over an empty box.
+ */
+function svgGradient(fill: GradientFill, id: string, box?: { w: number; h: number }): SVGElement {
+  const grad = document.createElementNS(SVG_NS, fill.radial ? 'radialGradient' : 'linearGradient');
+  grad.setAttribute('id', id);
+  const at = (fx: number, fy: number): [string, string] =>
+    box ? [`${(fx * box.w).toFixed(2)}`, `${(fy * box.h).toFixed(2)}`] : [`${(fx * 100).toFixed(1)}%`, `${(fy * 100).toFixed(1)}%`];
+  if (box) grad.setAttribute('gradientUnits', 'userSpaceOnUse');
+
+  if (!fill.radial) {
+    const angleRad = ((fill.angle ?? 0) * Math.PI) / 180;
+    const dx = Math.sin(angleRad);
+    const dy = -Math.cos(angleRad);
+    const [x1, y1] = at(0.5 - dx * 0.5, 0.5 - dy * 0.5);
+    const [x2, y2] = at(0.5 + dx * 0.5, 0.5 + dy * 0.5);
+    grad.setAttribute('x1', x1);
+    grad.setAttribute('y1', y1);
+    grad.setAttribute('x2', x2);
+    grad.setAttribute('y2', y2);
+  } else {
+    // Focus the radial gradient (the first stop) at the path's center point.
+    const c = fill.center ?? { x: 0.5, y: 0.5 };
+    const [cx, cy] = at(c.x, c.y);
+    if (fill.center || box) {
+      grad.setAttribute('cx', cx);
+      grad.setAttribute('cy', cy);
+      grad.setAttribute('fx', cx);
+      grad.setAttribute('fy', cy);
+    }
+    if (box) grad.setAttribute('r', `${(Math.max(box.w, box.h) / 2).toFixed(2)}`);
+  }
+
+  for (const stop of fill.stops) {
+    const s = document.createElementNS(SVG_NS, 'stop');
+    s.setAttribute('offset', `${(stop.pos * 100).toFixed(1)}%`);
+    s.setAttribute('stop-color', colorToCss(stop.color));
+    grad.appendChild(s);
+  }
+  return grad;
+}
+
+/**
+ * The `stroke` paint for an outline: its colour, or for a gradient outline a
+ * gradient laid over the shape's box (`w`×`h` in the SVG's user space).
+ */
+function strokePaint(svg: SVGSVGElement, stroke: Stroke, w: number, h: number): string {
+  if (!stroke.gradient) return colorToCss(stroke.color);
+  let defs = svg.querySelector('defs');
+  if (!defs) {
+    defs = document.createElementNS(SVG_NS, 'defs');
+    svg.insertBefore(defs, svg.firstChild);
+  }
+  const id = `stroke-${Math.random().toString(36).slice(2, 9)}`;
+  defs.appendChild(svgGradient(stroke.gradient, id, { w, h }));
+  return `url(#${id})`;
+}
+
 export function customGeomSvg(
   d: string,
   pw: number,
@@ -331,9 +365,14 @@ export function customGeomSvg(
   svg.setAttribute('preserveAspectRatio', 'none');
   svg.style.position = 'absolute';
   svg.style.inset = '0';
-  // Geometry must stay within the shape box; clipping prevents an imperfect
+  // Geometry must stay near the shape box; clipping prevents an imperfect
   // path (e.g. a spiral with an off arc) from drawing lines across the slide.
-  svg.style.overflow = 'hidden';
+  // Not *at* the box, though: an outline straddles the path, so half of it
+  // lies outside, and a freehand or "sketched" path bulges a little past its
+  // box — clipping flush shaved both flat. Allow the stroke and a margin.
+  const pad = (stroke?.width ?? 0) + 0.1 * Math.max(w, h);
+  svg.style.overflow = 'visible';
+  svg.style.clipPath = `inset(${(-pad).toFixed(2)}px)`;
 
   const fillVal = setupSvgFill(svg, fill, deps);
 
@@ -341,7 +380,7 @@ export function customGeomSvg(
   path.setAttribute('d', d);
   path.setAttribute('fill', fillVal);
   if (stroke) {
-    path.setAttribute('stroke', colorToCss(stroke.color));
+    path.setAttribute('stroke', strokePaint(svg, stroke, pw || w, ph || h));
     path.setAttribute('stroke-width', `${stroke.width}`);
     path.setAttribute('vector-effect', 'non-scaling-stroke');
     if (stroke.dash) path.setAttribute('stroke-dasharray', stroke.dash.join(','));

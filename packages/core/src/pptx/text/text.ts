@@ -145,13 +145,18 @@ function parseParagraph(
   // (e.g. "216" + a caption) doesn't balloon every wrapped line to the big size.
   // For an empty paragraph fall back to the paragraph mark (endParaRPr), which
   // gives a blank line its height.
-  const runSizes = runs.map((r) => r.sizePt).filter((s): s is number => s !== undefined);
-  const defaultSizePt = runSizes.length
-    ? Math.min(...runSizes)
-    : chain.runProps(level, child(p, 'endParaRPr')).sizePt;
+  const sized = runs.filter((r) => r.sizePt !== undefined);
+  const strutRun = sized.length
+    ? sized.reduce((a, b) => (b.sizePt! < a.sizePt! ? b : a))
+    : chain.runProps(level, child(p, 'endParaRPr'));
+  const defaultSizePt = strutRun.sizePt;
+  // The strut's face: the strut run's own, else any run's, else the mark's.
+  const defaultFont =
+    strutRun.font ?? runs.find((r) => r.font)?.font ?? chain.runProps(level, child(p, 'endParaRPr')).font;
 
   const result: Paragraph = { runs, level };
   if (defaultSizePt !== undefined && defaultSizePt > 0) result.defaultSizePt = defaultSizePt;
+  if (defaultFont) result.defaultFont = defaultFont;
   if (para.align) result.align = para.align;
   if (para.bullet) result.bullet = para.bullet;
   if (para.marginLeftPx !== undefined) result.marginLeftPx = para.marginLeftPx;

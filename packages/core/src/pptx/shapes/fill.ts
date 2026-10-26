@@ -136,11 +136,21 @@ export function strokeFromLn(ln: XmlNode | undefined, scope: ParseScope): Stroke
   // Explicit noFill on the line means "no outline".
   if (child(ln, 'noFill')) return undefined;
 
-  const color = resolveContainerColor(child(ln, 'solidFill'), scope.colorCtx);
+  let color = resolveContainerColor(child(ln, 'solidFill'), scope.colorCtx);
+  let gradient: Stroke['gradient'];
+  const gradFill = color ? undefined : child(ln, 'gradFill');
+  if (gradFill) {
+    const g = parseGradient(gradFill, scope.colorCtx);
+    if (g.type === 'gradient') {
+      gradient = g;
+      color = g.stops[0]!.color;
+    }
+  }
   if (!color) return undefined;
 
   const wEmu = attrNum(ln, 'w') ?? 9525; // default ~0.75pt
   const stroke: Stroke = { color, width: Math.max(0.5, emuToPx(wEmu)) };
+  if (gradient) stroke.gradient = gradient;
 
   const dashVal = attr(child(ln, 'prstDash'), 'val');
   if (dashVal && DASH_PATTERNS[dashVal]) {

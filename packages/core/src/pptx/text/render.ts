@@ -165,6 +165,9 @@ function renderParagraph(
     const sz = body.fontScale ? para.defaultSizePt * body.fontScale : para.defaultSizePt;
     p.style.fontSize = `${ptToPx(sz)}px`;
   }
+  if (para.defaultFont) {
+    p.style.fontFamily = `"${splitFontWeight(para.defaultFont).family}", Arial, Helvetica, sans-serif`;
+  }
   if (para.lineSpacingPt !== undefined) {
     // Exact point line spacing: an absolute height, unaffected by autofit reduction.
     p.style.lineHeight = `${ptToPx(para.lineSpacingPt)}px`;
@@ -236,10 +239,15 @@ function bulletSpan(
   if (color) b.style.color = colorToCss(color);
 
   const sizePt = lead?.sizePt ?? para.defaultSizePt;
+  const pct = bullet && 'sizePct' in bullet && bullet.sizePct ? bullet.sizePct : 1;
   if (sizePt !== undefined) {
-    const pct = bullet && 'sizePct' in bullet && bullet.sizePct ? bullet.sizePct : 1;
     b.style.fontSize = `${ptToPx((fontScale ? sizePt * fontScale : sizePt) * pct)}px`;
   }
+  // A marker no bigger than its text never sets the line's height, but in its
+  // own face (an Arial • beside Open Sans) its ascent and descent poke out of
+  // the text's line box and add a pixel to every bulleted line. Take it out of
+  // the line-height calculation; the glyph still draws where it did.
+  if (pct <= 1) b.style.lineHeight = '0';
 
   // A char bullet's own typeface matters (the glyph has to exist in it); a
   // number is drawn in the text's face.

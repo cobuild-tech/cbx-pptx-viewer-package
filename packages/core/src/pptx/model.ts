@@ -56,6 +56,11 @@ export interface Stroke {
   color: Color;
   /** Width in px. */
   width: number;
+  /**
+   * A gradient outline (`<a:ln><a:gradFill>`). `color` then holds its first
+   * stop, for whatever can only draw one colour (a CSS border, an arrowhead).
+   */
+  gradient?: Extract<Fill, { type: 'gradient' }>;
   /** Dash pattern in px (CSS stroke-dasharray), if dashed. */
   dash?: number[];
   cap?: 'butt' | 'round' | 'square';
@@ -130,6 +135,13 @@ export interface Paragraph {
    * and to give empty lines their correct height.
    */
   defaultSizePt?: number;
+  /**
+   * Typeface of the same run (or of the mark) — the strut's font. A line box
+   * is built from the strut as well as the runs, and two fonts with different
+   * ascent/descent under one fixed line-height make the line taller than that
+   * line-height; so the strut has to be in the text's own face.
+   */
+  defaultFont?: string;
 }
 
 export interface TextBody {
