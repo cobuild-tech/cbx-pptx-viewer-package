@@ -42,20 +42,27 @@ export function renderTextBody(body: TextBody, deps: RenderDeps, flow = false): 
     // PowerPoint shows text that overflows its box (the "do not autofit" default)
     // rather than clipping it; only the slide edge clips.
     box.style.overflow = 'visible';
-    // Inside a non-uniformly scaled group, the ancestor CSS scale (sx,sy) would
-    // squish glyphs. PowerPoint keeps text aspect-correct and reflows in the
-    // scaled box, with the font following the vertical scale. Counter the
-    // horizontal squish with scaleX(sy/sx) and widen the layout box by the
-    // inverse so wrapping still happens at the geometric (scaled) width.
+    // A group maps its children through ext/chExt, which scales their geometry
+    // but never their text: fonts keep their point size and insets their
+    // length, and the text reflows in the scaled box. The ancestor CSS scale
+    // (sx,sy) would enlarge, shrink or squish both, so lay the body out at
+    // slide scale — the box's geometric size less the insets — and undo the
+    // ancestor scale on it.
     const gs = deps.groupScale;
-    if (gs && gs.sx > 0 && gs.sy > 0 && Math.abs(gs.sx - gs.sy) > 1e-4) {
-      const k = gs.sy / gs.sx;
+    if (gs && gs.sx > 0 && gs.sy > 0 && (Math.abs(gs.sx - 1) > 1e-4 || Math.abs(gs.sy - 1) > 1e-4)) {
+      const { l, t, r, b } = body.insets;
+      box.style.left = `${l / gs.sx}px`;
+      box.style.top = `${t / gs.sy}px`;
       box.style.right = 'auto';
-      box.style.width = `calc((100% - ${body.insets.l + body.insets.r}px) / ${k})`;
-      box.style.transform = `scaleX(${k})`;
-      box.style.transformOrigin = 'left center';
+      box.style.bottom = 'auto';
+      box.style.width = `calc(100% * ${gs.sx} - ${l + r}px)`;
+      box.style.height = `calc(100% * ${gs.sy} - ${t + b}px)`;
+      box.style.transform = `scale(${1 / gs.sx}, ${1 / gs.sy})`;
+      box.style.transformOrigin = '0 0';
     }
   }
+
+  if (body.vert) setVertical(box, body.vert);
 
   if (deps.edit?.editable(body)) {
     box.setAttribute(EDIT_ATTR.body, deps.edit.key(body));
@@ -76,9 +83,53 @@ export function renderTextBody(body: TextBody, deps: RenderDeps, flow = false): 
   // Track auto-number counters per level.
   const counters: number[] = [];
   for (const para of body.paragraphs) {
-    box.appendChild(renderParagraph(para, body, counters, deps));
+    const p = renderParagraph(para, body, counters, deps);
+    if (body.vert) toLogical(p);
+    box.appendChild(p);
   }
   return box;
+}
+
+/**
+ * Turn a text box vertical. The writing mode does the layout: lines run down
+ * the box and stack across it, wrapping at the box's height, and the flex
+ * column anchoring the text now runs across too — so `anchor="t"` lands on the
+ * right, which is where a box's top goes when its text turns clockwise.
+ * `vert270` is the same layout turned half round, reading bottom to top.
+ */
+function setVertical(box: HTMLElement, vert: NonNullable<TextBody['vert']>): void {
+  box.style.writingMode = vert === 'mongolianVert' ? 'vertical-lr' : 'vertical-rl';
+  // `vert`/`vert270` turn every glyph with the line; the East Asian modes keep
+  // CJK upright, and WordArt stacks even Latin letters upright.
+  box.style.textOrientation =
+    vert === 'vert' || vert === 'vert270' ? 'sideways' : vert.startsWith('wordArt') ? 'upright' : 'mixed';
+  if (vert === 'vert270') {
+    // Turn about the box's centre. A group-scaled box is already transformed
+    // from its corner, so the turn goes inside that, centred by hand.
+    box.style.transform = box.style.transform
+      ? `${box.style.transform} translate(50%, 50%) rotate(180deg) translate(-50%, -50%)`
+      : 'rotate(180deg)';
+  }
+}
+
+/**
+ * A paragraph is styled in physical terms (space before = margin-top, indent =
+ * margin-left). In a vertical box those have to follow the text round, so map
+ * them onto their logical counterparts — spacing across the lines, indent
+ * along them — and the bullet gutter with them.
+ */
+function toLogical(el: HTMLElement): void {
+  const move = (from: 'marginTop' | 'marginBottom' | 'marginLeft' | 'width', to: string) => {
+    const v = el.style[from];
+    if (!v) return;
+    el.style[from] = '';
+    el.style.setProperty(to, v);
+  };
+  move('marginTop', 'margin-block-start');
+  move('marginBottom', 'margin-block-end');
+  move('marginLeft', 'margin-inline-start');
+  move('width', 'inline-size');
+  for (const c of el.children) if (c instanceof HTMLElement && c.getAttribute('contenteditable') === 'false') toLogical(c);
 }
 
 /** CSS vertical-align value for a text body's anchor (used by table cells). */

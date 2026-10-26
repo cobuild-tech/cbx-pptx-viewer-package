@@ -156,7 +156,7 @@ export function renderGroup(shape: GroupShape, deps: RenderDeps): HTMLElement {
   return el;
 }
 
-function strokeOverlay(
+export function strokeOverlay(
   d: string,
   w: number,
   h: number,
@@ -313,7 +313,7 @@ function setupSvgFill(svg: SVGSVGElement, fill: Fill | undefined, deps: RenderDe
   return 'none';
 }
 
-function customGeomSvg(
+export function customGeomSvg(
   d: string,
   pw: number,
   ph: number,

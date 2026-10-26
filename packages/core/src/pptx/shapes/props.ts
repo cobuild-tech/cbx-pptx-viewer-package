@@ -252,9 +252,23 @@ export function buildTextChain(
  * is what lets the editor re-find a selected shape after a commit rebuilds the
  * model.
  */
-export function identityOf(node: XmlNode): { id?: string; name?: string } {
+function cNvPrOf(node: XmlNode): XmlNode | undefined {
   const nv = node.children.find((c) => localName(c.name).startsWith('nv'));
-  const cNvPr = child(nv, 'cNvPr');
+  return child(nv, 'cNvPr');
+}
+
+/**
+ * Whether the shape is hidden (`<p:cNvPr hidden="1">`, the selection pane's
+ * eye). PowerPoint draws nothing for it — add-ins such as think-cell park
+ * their data in hidden objects on every slide.
+ */
+export function isHidden(node: XmlNode): boolean {
+  const hidden = attr(cNvPrOf(node), 'hidden');
+  return hidden === '1' || hidden === 'true';
+}
+
+export function identityOf(node: XmlNode): { id?: string; name?: string } {
+  const cNvPr = cNvPrOf(node);
   const out: { id?: string; name?: string } = {};
   const id = attr(cNvPr, 'id');
   const name = attr(cNvPr, 'name');

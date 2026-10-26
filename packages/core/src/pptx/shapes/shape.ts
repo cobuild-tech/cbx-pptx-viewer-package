@@ -16,6 +16,7 @@ import type {
   GroupShape,
   ConnectorShape,
   FrameShape,
+  PictureShape,
 } from '../model.js';
 import type { ParseScope } from '../scope.js';
 import {
@@ -27,6 +28,7 @@ import {
   resolveTransform,
   resolveGeometry,
   identityOf,
+  isHidden,
   resolveStroke,
   resolveEffects,
   styleRefColor,
@@ -58,6 +60,7 @@ export function buildShapes(
   const out: Shape[] = [];
   for (const node of expandChildren(tree)) {
     if (opts.skipPlaceholders && placeholderOf(node)) continue;
+    if (isHidden(node)) continue;
     const shape = buildShape(node, ctx, scope, groupFill);
     if (shape) out.push(shape);
   }
@@ -111,7 +114,7 @@ function dispatchShape(
     case 'cxnSp':
       return buildCxn(node, scope);
     case 'graphicFrame':
-      return buildFrame(node, ctx, scope);
+      return framePreview(node, ctx, scope) ?? buildFrame(node, ctx, scope);
     default:
       return null;
   }
@@ -179,7 +182,10 @@ function buildSp(
   const txBody = child(sp, 'txBody');
   if (txBody && children(txBody, 'p').length > 0) {
     const chain = buildTextChain(sp, ph, layoutPh, masterPh, ctx);
-    shape.text = parseTextBody(txBody, chain, ctx.colorCtx, scope);
+    shape.text = parseTextBody(txBody, chain, ctx.colorCtx, scope, [
+      child(child(layoutPh?.sp, 'txBody'), 'bodyPr'),
+      child(child(masterPh?.sp, 'txBody'), 'bodyPr'),
+    ]);
     // SmartArt drawings give each label its own text rectangle via <dsp:txXfrm>.
     const textBox = parseXfrmEl(child(sp, 'txXfrm'));
     if (textBox) shape.textBox = textBox;
@@ -225,6 +231,42 @@ function buildCxn(cxn: XmlNode, scope: ParseScope): ConnectorShape {
   const stroke = parseStroke(spPr, scope);
   if (stroke) shape.stroke = stroke;
   return shape;
+}
+
+/**
+ * A graphic frame holding content we do not draw ourselves — an embedded OLE
+ * object (Excel sheet, think-cell, Visio…) or any other extension — carries a
+ * preview picture, either inside `<p:oleObj>` or in its `mc:Fallback`. That
+ * preview is what PowerPoint shows until the object is activated, so render it
+ * as a picture in the frame's box.
+ */
+function framePreview(frame: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): PictureShape | null {
+  const graphicData = child(child(frame, 'graphic'), 'graphicData');
+  const uri = attr(graphicData, 'uri') ?? '';
+  if (!graphicData || uri === TABLE_URI || uri === CHART_URI || uri === DIAGRAM_URI) return null;
+  const pic = findPreviewPic(graphicData);
+  const shape = pic ? buildPic(pic, ctx, scope) : null;
+  if (!shape) return null;
+  const transform = parseXfrmEl(child(frame, 'xfrm'));
+  if (transform) shape.transform = transform;
+  return shape;
+}
+
+/** First `<p:pic>` under a node, preferring an `mc:Fallback` branch over its Choice. */
+function findPreviewPic(node: XmlNode): XmlNode | undefined {
+  for (const c of node.children) {
+    const name = localName(c.name);
+    if (name === 'pic') return c;
+    if (name === 'AlternateContent') {
+      const branch = child(c, 'Fallback') ?? child(c, 'Choice');
+      const found = branch ? findPreviewPic(branch) : undefined;
+      if (found) return found;
+      continue;
+    }
+    const found = findPreviewPic(c);
+    if (found) return found;
+  }
+  return undefined;
 }
 
 function buildFrame(frame: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): FrameShape {

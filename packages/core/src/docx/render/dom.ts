@@ -21,6 +21,7 @@ import { ptToPx } from '../../oxml/units.js';
 import { fontStack, lineHeightRatio, eastAsianLineHeightRatio, EAST_ASIAN_TEXT } from '../../oxml/fontMetrics.js';
 import { presetPath, OPEN_PRESETS, EVENODD_PRESETS } from '../../oxml/drawingml/geometry/presets.js';
 import { renderChart } from '../../oxml/drawingml/chart/render.js';
+import { blipFilter } from '../../oxml/drawingml/blip.js';
 import type {
   DocxPage,
   DocxBlock,
@@ -1370,43 +1371,9 @@ function renderImage(img: DocxInlineImage, deps: RenderDeps): HTMLElement {
   el.style.display = 'inline-block';
   // An inline picture sits on the text baseline, as in Word.
   el.style.verticalAlign = 'baseline';
-  if (img.duotone) el.style.filter = `url(#${duotoneFilter(el.ownerDocument, img.duotone)})`;
+  const filter = img.duotone ? blipFilter(el.ownerDocument, { duotone: img.duotone }) : undefined;
+  if (filter) el.style.filter = `url(#${filter})`;
   return el;
-}
-
-const SVG_NS = 'http://www.w3.org/2000/svg';
-
-/**
- * Register (once per document and colour pair) an SVG filter recolouring an
- * image as a duotone — luminance mapped linearly from the dark colour to the
- * light one — and return its id. CSS `filter: url()` only reaches filters in
- * the same document, so the definition lives in a hidden <svg> in the body.
- */
-function duotoneFilter(doc: Document, [dark, light]: [string, string]): string {
-  const id = `cbx-duotone-${dark}-${light}`.toLowerCase();
-  if (doc.getElementById(id)) return id;
-  const make = (name: string, attrs: Record<string, string>) => {
-    const node = doc.createElementNS(SVG_NS, name);
-    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-    return node;
-  };
-  const ch = (hex: string, i: number) => parseInt(hex.slice(i * 2, i * 2 + 2), 16) / 255;
-  const table = (i: number) => `${ch(dark, i).toFixed(3)} ${ch(light, i).toFixed(3)}`;
-  const svg = make('svg', { width: '0', height: '0', 'aria-hidden': 'true' });
-  svg.style.position = 'absolute';
-  const filter = make('filter', { id, 'color-interpolation-filters': 'sRGB' });
-  filter.appendChild(
-    make('feColorMatrix', {
-      type: 'matrix',
-      values: '0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0.2126 0.7152 0.0722 0 0 0 0 0 1 0',
-    }),
-  );
-  const transfer = make('feComponentTransfer', {});
-  ['feFuncR', 'feFuncG', 'feFuncB'].forEach((f, i) => transfer.appendChild(make(f, { type: 'table', tableValues: table(i) })));
-  filter.appendChild(transfer);
-  svg.appendChild(filter);
-  (doc.body ?? doc.documentElement).appendChild(svg);
-  return id;
 }
 
 /** A DrawingML shape (filled/outlined box, optionally a text box). */

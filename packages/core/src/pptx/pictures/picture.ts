@@ -10,6 +10,7 @@ import { child, attrNum, type XmlNode } from '../../oxml/xml.js';
 import type { PictureShape } from '../model.js';
 import type { ParseScope } from '../scope.js';
 import { blipEmbed } from '../shapes/fill.js';
+import { parseBlipEffects } from '../../oxml/drawingml/blip.js';
 import {
   type SlideBuildCtx,
   resolveTransform,
@@ -28,6 +29,8 @@ export function buildPic(pic: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): P
   if (!part) return null;
 
   const shape: PictureShape = { kind: 'picture', part, fill: { type: 'none' } };
+  const effects = parseBlipEffects(blip, scope.colorCtx);
+  if (effects) shape.blip = effects;
 
   // Picture placeholders inherit geometry from the layout/master, like text ones.
   const ph = placeholderOf(pic);
@@ -54,8 +57,8 @@ export function buildPic(pic: XmlNode, ctx: SlideBuildCtx, scope: ParseScope): P
   const stroke = resolveStroke(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
   if (stroke) shape.stroke = stroke;
 
-  const effects = resolveEffects(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
-  if (effects.length) shape.effects = effects;
+  const shapeEffects = resolveEffects(spPr, style, layoutSpPr, layoutStyle, masterSpPr, masterStyle, ctx);
+  if (shapeEffects.length) shape.effects = shapeEffects;
 
   const srcRect = child(blipFill, 'srcRect');
   if (srcRect) {

@@ -9,6 +9,7 @@
 import { OpcPackage } from '../../oxml/package.js';
 import { RelType } from '../relTypes.js';
 import { child, children, attr, attrNum, type XmlNode } from '../../oxml/xml.js';
+import { emfToSvg, isEmf } from '../../oxml/emf.js';
 import { emuToPx } from '../../oxml/units.js';
 import type { Shape, Slide, SlideSize, EmbeddedFont, TextBody } from '../model.js';
 import { buildSlide } from '../slides/slide.js';
@@ -94,9 +95,18 @@ export class Deck {
 
   /** Build one slide, capturing every text node's XML source as it parses. */
   private build(part: string, index: number): Slide {
-    return buildSlide(this.pkg, part, index, this.defaultTextStyle, (model, node, srcPart) => {
-      this.sources.set(model, { node, part: srcPart });
-    });
+    const presXml = this.pkg.getXml(this.presPart);
+    const firstSlideNum = attrNum(presXml, 'firstSlideNum') ?? 1;
+    return buildSlide(
+      this.pkg,
+      part,
+      index,
+      this.defaultTextStyle,
+      (model, node, srcPart) => {
+        this.sources.set(model, { node, part: srcPart });
+      },
+      firstSlideNum,
+    );
   }
 
   /**
@@ -287,11 +297,19 @@ export class Deck {
     const bytes = this.pkg.getBytes(part);
     if (!bytes || typeof URL === 'undefined' || typeof Blob === 'undefined') return undefined;
     const type = this.pkg.contentType(part) ?? 'application/octet-stream';
-    // EMF/WMF are vector metafiles no browser can decode via <img>; loading them
-    // yields a broken-image box instead of nothing, which shows through crop/overflow
-    // clipping as stray artifacts. Skip so callers fall back to rendering nothing.
-    if (UNDECODABLE_IMAGE_TYPES.has(type)) return undefined;
-    const url = URL.createObjectURL(new Blob([bytes as BlobPart], { type }));
+    // EMF/WMF are vector metafiles no browser can decode via <img>. An EMF is
+    // replayed into SVG; anything still undecodable is skipped rather than
+    // loaded, since a broken-image box shows through crop/overflow clipping as
+    // a stray artifact.
+    let blob: Blob | undefined;
+    if (isEmf(bytes)) {
+      const svg = emfToSvg(bytes);
+      if (svg) blob = new Blob([svg], { type: 'image/svg+xml' });
+    } else if (!UNDECODABLE_IMAGE_TYPES.has(type)) {
+      blob = new Blob([bytes as BlobPart], { type });
+    }
+    if (!blob) return undefined;
+    const url = URL.createObjectURL(blob);
     this.urlCache.set(part, url);
     return url;
   }

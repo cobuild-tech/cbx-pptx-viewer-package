@@ -29,4 +29,10 @@ export interface ParseScope {
   resolveHyperlink?(relId: string): string | undefined;
   /** Edit support: record the XML node a model object came from. */
   recordSource?(model: object, node: XmlNode): void;
+  /**
+   * The number of the slide being built, for `<a:fld type="slidenum">`. A field
+   * on the master is shared by every slide, so its cached text (often `‹#›`)
+   * is only a prompt — the number has to come from the slide it is drawn on.
+   */
+  slideNumber?: number;
 }

@@ -7,7 +7,7 @@
  */
 import { child, children, attr, attrNum, localName, type XmlNode } from '../../oxml/xml.js';
 import { emuToPx } from '../../oxml/units.js';
-import type { Paragraph, TextBody, TextRun, VerticalAnchor } from '../model.js';
+import type { Paragraph, TextBody, TextRun, TextVert, VerticalAnchor } from '../model.js';
 import type { ColorContext } from '../color.js';
 import type { TextStyleChain } from './textStyles.js';
 import type { ParseScope } from '../scope.js';
@@ -19,8 +19,9 @@ export function parseTextBody(
   chain: TextStyleChain,
   ctx: ColorContext,
   scope: ParseScope,
+  inheritedBodyPr: (XmlNode | undefined)[] = [],
 ): TextBody {
-  const bodyPr = child(txBody, 'bodyPr');
+  const bodyPr = effectiveBodyPr([child(txBody, 'bodyPr'), ...inheritedBodyPr]);
   const body: TextBody = {
     paragraphs: [],
     anchor: readAnchor(bodyPr),
@@ -32,6 +33,9 @@ export function parseTextBody(
       b: insetPx(bodyPr, 'bIns', DEFAULT_INSET.b),
     },
   };
+
+  const vert = readVert(bodyPr);
+  if (vert) body.vert = vert;
 
   const normAutofit = child(bodyPr, 'normAutofit');
   if (normAutofit) {
@@ -48,11 +52,43 @@ export function parseTextBody(
   return body;
 }
 
+const AUTOFITS = new Set(['noAutofit', 'normAutofit', 'spAutoFit']);
+
+/**
+ * A placeholder's `<a:bodyPr>` inherits from the layout's and then the
+ * master's, attribute by attribute: a slide title stating only `<a:bodyPr/>`
+ * still takes its anchor and insets from the master. The autofit mode is one
+ * choice, taken from the most specific body that makes it. Most specific first.
+ */
+function effectiveBodyPr(chain: (XmlNode | undefined)[]): XmlNode | undefined {
+  const prs = chain.filter((n): n is XmlNode => n !== undefined);
+  if (prs.length <= 1) return prs[0];
+  const attrs: Record<string, string> = {};
+  for (const n of [...prs].reverse()) Object.assign(attrs, n.attrs);
+  const fit = prs.map((n) => n.children.find((c) => AUTOFITS.has(localName(c.name)))).find(Boolean);
+  return { name: prs[0]!.name, attrs, children: fit ? [fit] : [], text: '' };
+}
+
 export function readAnchor(bodyPr: XmlNode | undefined): VerticalAnchor {
   const a = attr(bodyPr, 'anchor');
   if (a === 'ctr') return 'ctr';
   if (a === 'b') return 'bottom';
   return 'top';
+}
+
+const TEXT_VERTS: ReadonlySet<string> = new Set<TextVert>([
+  'vert',
+  'vert270',
+  'eaVert',
+  'wordArtVert',
+  'wordArtVertRtl',
+  'mongolianVert',
+]);
+
+/** The `vert` attribute of a `<a:bodyPr>` or `<a:tcPr>`; undefined for horizontal text. */
+export function readVert(node: XmlNode | undefined): TextVert | undefined {
+  const v = attr(node, 'vert');
+  return v && TEXT_VERTS.has(v) ? (v as TextVert) : undefined;
 }
 
 function insetPx(bodyPr: XmlNode | undefined, name: string, fallback: number): number {
@@ -86,8 +122,12 @@ function parseParagraph(
       runs.push(run);
       scope.recordSource?.(run, node);
     } else if (tag === 'fld') {
-      // Fields (slide number, date...). Render the cached text it carries.
-      const text = child(node, 't')?.text ?? '';
+      // Fields (slide number, date...). Render the cached text it carries,
+      // except a slide number, which PowerPoint recomputes for every slide.
+      const text =
+        attr(node, 'type') === 'slidenum' && scope.slideNumber !== undefined
+          ? String(scope.slideNumber)
+          : child(node, 't')?.text ?? '';
       if (text) {
         const parsed = parseRun(node, level, chain, ctx, scope);
         const run: TextRun = { ...parsed, text };

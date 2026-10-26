@@ -67,6 +67,7 @@ function buildDeck(): Uint8Array {
         <p:sp>
           <p:nvSpPr><p:cNvPr id="2" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
           <p:spPr><a:xfrm><a:off x="457200" y="274638"/><a:ext cx="11277600" cy="1325563"/></a:xfrm></p:spPr>
+          <p:txBody><a:bodyPr anchor="b" lIns="0"/><a:p/></p:txBody>
         </p:sp>
       </p:spTree></p:cSld></p:sldLayout>`,
     ),
@@ -82,6 +83,11 @@ function buildDeck(): Uint8Array {
               <p:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="457200" cy="457200"/></a:xfrm>
                 <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
                 <a:solidFill><a:schemeClr val="accent1"/></a:solidFill></p:spPr>
+            </p:sp>
+            <p:sp>
+              <p:nvSpPr><p:cNvPr id="10" name="Title"/><p:cNvSpPr/><p:nvPr><p:ph type="title"/></p:nvPr></p:nvSpPr>
+              <p:spPr/>
+              <p:txBody><a:bodyPr anchor="ctr" tIns="0" vert="vert270"/><a:p/></p:txBody>
             </p:sp>
           </p:spTree>
         </p:cSld>
@@ -132,6 +138,16 @@ describe('Deck pipeline', () => {
       { weight: 700, style: 'normal', part: 'ppt/fonts/font2.fntdata' },
     ]);
     expect(deck.fontBytes('ppt/fonts/font1.fntdata')).toBeInstanceOf(Uint8Array);
+  });
+
+  it("inherits a placeholder's bodyPr attribute by attribute: slide, layout, master", () => {
+    const title = deck.slides[0]!.shapes.find((s) => s.name === 'Title') as PresetShape;
+    const text = title.text!;
+    expect(text.anchor).toBe('bottom'); // layout over master
+    expect(text.insets.l).toBe(0); // layout
+    expect(text.insets.t).toBe(0); // master
+    expect(text.insets.r).toBeCloseTo(9.6); // default
+    expect(text.vert).toBe('vert270'); // master
   });
 
   it('resolves the slide background through the master scheme color', () => {

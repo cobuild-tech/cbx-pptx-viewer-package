@@ -37,6 +37,7 @@ export function buildSlide(
   index: number,
   defaultTextStyle?: XmlNode,
   sink?: SourceSink,
+  firstSlideNum = 1,
 ): Slide {
   const slideXml = pkg.getXml(slidePart);
   const layoutPart = pkg.relByType(slidePart, RelType.SlideLayout)?.target;
@@ -52,18 +53,19 @@ export function buildSlide(
   const theme: Theme = parseTheme(themePart ? pkg.getXml(themePart) : undefined);
   const clrMap = readClrMap(masterXml);
   const colorCtx: ColorContext = { theme, clrMap };
+  const slideNumber = index + firstSlideNum;
 
   const scopes: SlideScopes = {
-    slide: makeScope(pkg, slidePart, colorCtx, sink),
-    layout: makeScope(pkg, layoutPart ?? slidePart, colorCtx, sink),
-    master: makeScope(pkg, masterPart ?? slidePart, colorCtx, sink),
+    slide: makeScope(pkg, slidePart, colorCtx, slideNumber, sink),
+    layout: makeScope(pkg, layoutPart ?? slidePart, colorCtx, slideNumber, sink),
+    master: makeScope(pkg, masterPart ?? slidePart, colorCtx, slideNumber, sink),
   };
 
   const parts: PartResolver = {
     relTargetsByType: (type) => pkg.relsByType(slidePart, type).map((r) => r.target),
     partForRel: (relId) => pkg.resolveRel(slidePart, relId)?.target,
     xml: (part) => pkg.getXml(part),
-    scopeFor: (part) => makeScope(pkg, part, colorCtx, sink),
+    scopeFor: (part) => makeScope(pkg, part, colorCtx, slideNumber, sink),
   };
 
   const ctx: SlideBuildCtx = {
@@ -122,10 +124,12 @@ function makeScope(
   pkg: OpcPackage,
   partPath: string,
   colorCtx: ColorContext,
+  slideNumber: number,
   sink?: SourceSink,
 ): ParseScope {
   const scope: ParseScope = {
     colorCtx,
+    slideNumber,
     resolveImage: (rId) => pkg.resolveRel(partPath, rId)?.target,
     resolveHyperlink: (rId) => {
       const rel = pkg.resolveRel(partPath, rId);

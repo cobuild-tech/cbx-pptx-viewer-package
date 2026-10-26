@@ -11,7 +11,7 @@ import type { Table, TableCell, Stroke } from '../model.js';
 import type { ColorContext } from '../color.js';
 import type { ParseScope } from '../scope.js';
 import { parseFill, strokeFromLn } from '../shapes/fill.js';
-import { parseTextBody, readAnchor } from '../text/text.js';
+import { parseTextBody, readAnchor, readVert } from '../text/text.js';
 import { TextStyleChain } from '../text/textStyles.js';
 
 export function parseTable(tbl: XmlNode, ctx: ColorContext, scope: ParseScope): Table {
@@ -53,12 +53,16 @@ function parseCell(tc: XmlNode, ctx: ColorContext, scope: ParseScope): TableCell
   if (t) borders.t = t;
   if (b) borders.b = b;
 
+  const down = border(child(tcPr, 'lnTlToBr'), scope);
+  const up = border(child(tcPr, 'lnBlToTr'), scope);
+
   const cell: TableCell = {
     fill,
     colSpan: attrNum(tc, 'gridSpan') ?? 1,
     rowSpan: attrNum(tc, 'rowSpan') ?? 1,
     borders,
   };
+  if (down || up) cell.diagonals = { ...(down && { down }), ...(up && { up }) };
 
   const txBody = child(tc, 'txBody');
   if (txBody && children(txBody, 'p').length > 0) {
@@ -69,6 +73,17 @@ function parseCell(tc: XmlNode, ctx: ColorContext, scope: ParseScope): TableCell
     cell.text = parseTextBody(txBody, chain, ctx, scope);
     // Table cells anchor vertically via `tcPr@anchor`, not the txBody's `bodyPr@anchor`.
     if (attr(tcPr, 'anchor') !== undefined) cell.text.anchor = readAnchor(tcPr);
+    // Likewise its insets are the cell margins and its direction `tcPr@vert`;
+    // the txBody's own bodyPr says nothing about either.
+    cell.text.insets = {
+      l: emuToPx(attrNum(tcPr, 'marL') ?? 91440),
+      t: emuToPx(attrNum(tcPr, 'marT') ?? 45720),
+      r: emuToPx(attrNum(tcPr, 'marR') ?? 91440),
+      b: emuToPx(attrNum(tcPr, 'marB') ?? 45720),
+    };
+    const vert = readVert(tcPr);
+    if (vert) cell.text.vert = vert;
+    else delete cell.text.vert;
   }
   return cell;
 }

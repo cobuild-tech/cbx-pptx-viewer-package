@@ -76,6 +76,8 @@ export type Effect =
   | { type: 'softEdge'; radius: number }
   | { type: 'reflection'; blur: number; dist: number; startAlpha: number; endAlpha: number };
 
+export type TextVert = 'vert' | 'vert270' | 'eaVert' | 'wordArtVert' | 'wordArtVertRtl' | 'mongolianVert';
+
 export type TextAlign = 'l' | 'ctr' | 'r' | 'just';
 export type VerticalAnchor = 'top' | 'ctr' | 'bottom';
 
@@ -136,6 +138,12 @@ export interface TextBody {
   wrap: boolean;
   /** Internal insets in px: left, top, right, bottom. */
   insets: { l: number; t: number; r: number; b: number };
+  /**
+   * Vertical text (`bodyPr@vert`, or `tcPr@vert` in a table cell); absent for
+   * ordinary horizontal text. `vert` turns the text 90° clockwise, `vert270`
+   * 90° counter-clockwise; the East Asian modes stack the characters.
+   */
+  vert?: TextVert;
   /** normAutofit shrink factors, if the box shrinks text to fit. */
   fontScale?: number;
   lnSpcReductionPct?: number;
@@ -158,6 +166,7 @@ export type Geometry =
 
 export type { CustomPath } from '../oxml/drawingml/geometry/custom.js';
 import type { CustomPath } from '../oxml/drawingml/geometry/custom.js';
+import type { BlipEffects } from '../oxml/drawingml/blip.js';
 
 interface ShapeBase {
   id?: string;
@@ -190,6 +199,8 @@ export interface PictureShape extends ShapeBase {
   part: string;
   fill: Fill;
   stroke?: Stroke;
+  /** Transparency and recolouring from the `<a:blip>` (alphaModFix, clrChange, duotone). */
+  blip?: BlipEffects;
   crop?: { l: number; t: number; r: number; b: number };
   /** Shape the image is clipped to (e.g. a circle); rectangle if omitted. */
   geom?: Geometry;
@@ -236,6 +247,8 @@ export interface TableCell {
   colSpan: number;
   rowSpan: number;
   borders: { l?: Stroke; t?: Stroke; r?: Stroke; b?: Stroke };
+  /** Diagonal rules: `down` top-left to bottom-right, `up` bottom-left to top-right. */
+  diagonals?: { down?: Stroke; up?: Stroke };
 }
 
 export interface Table {

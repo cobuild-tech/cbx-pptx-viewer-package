@@ -67,8 +67,10 @@ function renderFrame(shape: FrameShape, deps: RenderDeps): HTMLElement {
     }
   } else if (shape.frameType === 'chart' && shape.chart) {
     el.appendChild(renderChart(shape.chart, shape.transform?.w ?? 0, shape.transform?.h ?? 0));
-  } else {
-    // Charts / unresolved diagrams / unknown: a labeled placeholder so it isn't invisible.
+  } else if (shape.frameType !== 'unknown') {
+    // A chart or diagram we failed to resolve: a labeled placeholder so the gap
+    // is visible. An unknown frame with no preview picture draws nothing, as in
+    // PowerPoint.
     el.style.display = 'flex';
     el.style.alignItems = 'center';
     el.style.justifyContent = 'center';

@@ -83,11 +83,11 @@ export interface RenderDeps {
   /** Present only when the deck is being rendered for editing. */
   edit?: EditRenderContext;
   /**
-   * Cumulative non-uniform scale of all ancestor groups, as a product of each
-   * group's (off/chExt) ratio. Geometry is squished by the ancestor CSS scale,
-   * but PowerPoint never squishes glyphs: text keeps its aspect ratio and just
-   * reflows in the scaled box (font follows the vertical scale). The text
-   * renderer reads this to counter the horizontal squish. Absent ⇒ no scaling.
+   * Cumulative scale of all ancestor groups, as a product of each group's
+   * (ext/chExt) ratio. Geometry is scaled by the ancestor CSS scale, but
+   * PowerPoint never scales text: fonts keep their point size and just reflow
+   * in the scaled box. The text renderer reads this to undo the ancestor
+   * scale on text. Absent ⇒ no scaling.
    */
   groupScale?: { sx: number; sy: number };
   /**
